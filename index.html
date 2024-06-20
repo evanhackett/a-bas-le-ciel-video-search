@@ -23,13 +23,20 @@
         }
         .result-left {
             flex: 1;
+            /* max-height: 400px;
+            overflow-y: auto; */
             margin-right: 10px;
             display: flex;
             flex-direction: column;
         }
+        .result-left img {
+            max-width: 400px;
+            height: auto;
+            margin-bottom: 10px;
+        }
         .result-right {
             flex: 1;
-            max-height: 400px;
+            max-height: 700px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
@@ -42,7 +49,7 @@
             background-color: yellow;
         }
         /* Media query for small screens */
-        @media (max-width: 600px) {
+        @media (max-width: 740px) {
             .result-item {
                 flex-direction: column;
             }
@@ -54,12 +61,7 @@
                 max-height: 350px;
             }
         }
-        /* Media query for tablet sized screens */
-        @media (max-width: 900px) {
-            .result-right {
-                max-height: 550px;
-            }
-        }
+
     </style>
     <script>
         let videos = [];
@@ -81,6 +83,22 @@
             });
             return highlightedText;
         }
+
+        function formatDate(dateString) {
+            const year = dateString.substr(0, 4);
+            const month = dateString.substr(4, 2);
+            const day = dateString.substr(6, 2);
+
+            // Array of month names
+            const months = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+
+            // Format the date with padded day and month
+            return `${day.padStart(2, '0')} ${months[parseInt(month, 10) - 1]} ${year}`;
+        }
+
 
         function searchVideos() {
             const query = document.getElementById('search-input').value.toLowerCase();
@@ -105,9 +123,10 @@
                 videoElement.classList.add('result-item');
                 videoElement.innerHTML = `
                     <div class="result-left">
+                        <img src="${video.thumbnail}" alt="Thumbnail">
+                        <p>${formatDate(video.upload_date)} - <a href="${video.url}" target="_blank">Watch Video on YouTube</a></p>
                         <h3>${highlightText(video.title, queryTokens)}</h3>
-                        <p>${highlightText(video.description, queryTokens)}</p>
-                        <a href="${video.video_url}" target="_blank">Watch Video</a>
+                        <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), queryTokens)}</p>
                     </div>
                     <div class="result-right">
                         <h3>Transcript</h3>
