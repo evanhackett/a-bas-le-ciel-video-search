@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Archive</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .search-container {
+            margin-bottom: 20px;
+        }
+        .result-item {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: stretch;
+        }
+        .result-left {
+            flex: 1;
+            margin-right: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+        .result-right {
+            flex: 1;
+            max-height: 400px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+        }
+        .result-item h3 {
+            margin: 0;
+        }
+        .highlight {
+            background-color: yellow;
+        }
+        /* Media query for small screens */
+        @media (max-width: 600px) {
+            .result-item {
+                flex-direction: column;
+            }
+            .result-left, .result-right {
+                margin-right: 0;
+                margin-bottom: 10px;
+            }
+            .result-right {
+                max-height: 350px;
+            }
+        }
+        /* Media query for tablet sized screens */
+        @media (max-width: 900px) {
+            .result-right {
+                max-height: 550px;
+            }
+        }
+    </style>
+    <script>
+        let videos = [];
+
+        async function loadVideos() {
+            const response = await fetch('metadata.json');
+            videos = await response.json();
+        }
+
+        function tokenize(input) {
+            return input.trim().toLowerCase().split(/\s+/);
+        }
+
+        function highlightText(text, queryTokens) {
+            let highlightedText = text;
+            queryTokens.forEach(token => {
+                const regex = new RegExp(`(${token})`, 'gi');
+                highlightedText = highlightedText.replace(regex, '<span class="highlight">$1</span>');
+            });
+            return highlightedText;
+        }
+
+        function searchVideos() {
+            const query = document.getElementById('search-input').value.toLowerCase();
+            const isExact = document.getElementById('exact-match').checked;
+            const queryTokens = tokenize(query);
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+
+            const filteredVideos = videos.filter(video => {
+                const videoContent = (video.title + ' ' + video.description + ' ' + video.transcript).toLowerCase();
+                if (isExact) {
+                    // Exact phrase match
+                    return videoContent.includes(query);
+                } else {
+                    // Partial match
+                    return queryTokens.some(token => videoContent.includes(token));
+                }
+            });
+
+            filteredVideos.forEach(video => {
+                const videoElement = document.createElement('div');
+                videoElement.classList.add('result-item');
+                videoElement.innerHTML = `
+                    <div class="result-left">
+                        <h3>${highlightText(video.title, queryTokens)}</h3>
+                        <p>${highlightText(video.description, queryTokens)}</p>
+                        <a href="${video.video_url}" target="_blank">Watch Video</a>
+                    </div>
+                    <div class="result-right">
+                        <h3>Transcript</h3>
+                        <p>${highlightText(video.transcript, queryTokens)}</p>
+                    </div>
+                `;
+                resultsDiv.appendChild(videoElement);
+            });
+        }
+
+        window.onload = loadVideos;
+
+    </script>
+</head>
+<body>
+    <div class="search-container">
+        <input type="text" id="search-input" placeholder="Search for videos...">
+        <button onclick="searchVideos()">Search</button>
+        <label>
+            <input type="checkbox" id="exact-match"> Exact Match
+        </label>
+    </div>
+    <div id="results"></div>
+</body>
+</html>
