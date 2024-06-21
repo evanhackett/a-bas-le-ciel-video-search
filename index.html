@@ -208,12 +208,12 @@
                     <div class="result-left">
                         <img src="${video.thumbnail}" alt="Thumbnail">
                         <p>${formatDate(video.upload_date)} - <a href="${video.url}" target="_blank">Watch Video on YouTube</a></p>
-                        <h3>${highlightText(video.title, queryTokens)}</h3>
-                        <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), queryTokens)}</p>
+                        <h3>${highlightText(video.title, options.isExact ? [query] : queryTokens)}</h3>
+                        <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), options.isExact ? [query] : queryTokens)}</p>
                     </div>
                     <div class="result-right">
                         <h3>Transcript</h3>
-                        <p>${highlightText(video.transcript, queryTokens)}</p>
+                        <p>${highlightText(video.transcript, options.isExact ? [query] : queryTokens)}</p>
                     </div>
                 `;
                 resultsDiv.appendChild(videoElement);
@@ -238,26 +238,26 @@
             <div class="column">
                 <div>
                     <input type="radio" id="option1" name="options" value="exact" checked>
-                    <label for="option1">Match exact phrase</label>
+                    <label for="option1">Contains exact search phrase</label>
                 </div>
                 <div>
                     <input type="radio" id="option2" name="options" value="partial">
-                    <label for="option2">Match any word</label>
+                    <label for="option2">Contains any word in search phrase</label>
                 </div>
             </div>
 
             <div class="column">
                 <div>
                     <input type="checkbox" id="titleCheckbox" name="titleCheckbox" value="title" checked>
-                    <label for="titleCheckbox">Search in Title</label>
+                    <label for="titleCheckbox">Search Title</label>
                 </div>
                 <div>
                     <input type="checkbox" id="descriptionCheckbox" name="descriptionCheckbox" value="description" checked>
-                    <label for="descriptionCheckbox">Search in Description</label>
+                    <label for="descriptionCheckbox">Search Description</label>
                 </div>
                 <div>
                     <input type="checkbox" id="transcriptCheckbox" name="transcriptCheckbox" value="transcript" checked>
-                    <label for="transcriptCheckbox">Search in Transcript</label>
+                    <label for="transcriptCheckbox">Search Transcript</label>
                 </div>
             </div>
         </form>
