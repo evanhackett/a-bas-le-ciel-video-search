@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Video Archive</title>
+    <title>a-bas-le-ciel Video Search</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
@@ -67,7 +67,7 @@
         let videos = [];
 
         async function loadVideos() {
-            const response = await fetch('metadata.json');
+            const response = await fetch('updated_videos.json');
             videos = await response.json();
         }
 
@@ -102,19 +102,40 @@
 
         function searchVideos() {
             const query = document.getElementById('search-input').value.toLowerCase();
-            const isExact = document.getElementById('exact-match').checked;
+            const optionsEl = document.getElementsByName('options');
+
+            let selectedOption;
+            for (const option of optionsEl) {
+                if (option.checked) {
+                    selectedOption = option.value;
+                    break;
+                }
+            }
+
+            const options = {
+                title: document.getElementById('titleCheckbox').checked,
+                description: document.getElementById('descriptionCheckbox').checked,
+                transcript: document.getElementById('transcriptCheckbox').checked,
+                isExact: selectedOption === 'exact',
+            };
+
             const queryTokens = tokenize(query);
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = '';
 
             const filteredVideos = videos.filter(video => {
-                const videoContent = (video.title + ' ' + video.description + ' ' + video.transcript).toLowerCase();
-                if (isExact) {
+                let searchContent = '';
+                if (options.title) searchContent += `${video.title} `;
+                if (options.description) searchContent += `${video.description} `;
+                if (options.transcript) searchContent += `${video.transcript} `;
+                searchContent = searchContent.toLowerCase();
+
+                if (options.isExact) {
                     // Exact phrase match
-                    return videoContent.includes(query);
+                    return searchContent.includes(query);
                 } else {
                     // Partial match
-                    return queryTokens.some(token => videoContent.includes(token));
+                    return queryTokens.some(token => searchContent.includes(token));
                 }
             });
 
@@ -135,6 +156,9 @@
                 `;
                 resultsDiv.appendChild(videoElement);
             });
+
+            const countElement = document.getElementById('result-count');
+            countElement.textContent = `${filteredVideos.length} video(s) found`;
         }
 
         window.onload = loadVideos;
@@ -142,13 +166,29 @@
     </script>
 </head>
 <body>
+    <h1>a-bas-le-ciel Video Search</h1>
     <div class="search-container">
         <input type="text" id="search-input" placeholder="Search for videos...">
         <button onclick="searchVideos()">Search</button>
-        <label>
-            <input type="checkbox" id="exact-match"> Exact Match
-        </label>
+        <form>
+            <p>Search options:</p>
+            <input type="radio" id="option1" name="options" value="exact" checked>
+            <label for="option1">Match exact phrase</label><br>
+
+            <input type="radio" id="option2" name="options" value="partial">
+            <label for="option2">Match any word</label><br>
+
+            <input type="checkbox" id="titleCheckbox" name="titleCheckbox" value="title" checked>
+            <label for="titleCheckbox">Search in Title</label><br>
+
+            <input type="checkbox" id="descriptionCheckbox" name="descriptionCheckbox" value="description" checked>
+            <label for="descriptionCheckbox">Search in Description</label><br>
+
+            <input type="checkbox" id="transcriptCheckbox" name="transcriptCheckbox" value="transcript" checked>
+            <label for="transcriptCheckbox">Search in Transcript</label><br>
+        </form>
     </div>
+    <div id="result-count"></div>
     <div id="results"></div>
 </body>
 </html>
