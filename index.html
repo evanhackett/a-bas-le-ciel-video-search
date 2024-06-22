@@ -123,8 +123,29 @@
         let videos = [];
 
         async function loadVideos() {
-            const response = await fetch('videos.json');
-            videos = await response.json();
+            try {
+                const response = await fetch('videos.json');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                videos = data;
+
+                // Show the search form after data is loaded
+                document.getElementById('search-container').style.display = 'block';
+            } catch (error) {
+                console.error('Error loading video data:', error);
+                showError('Failed to load video data. Please try again later.');
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.textContent = message;
+            errorDiv.style.color = 'red';
+            document.body.insertBefore(errorDiv, document.body.firstChild);
         }
 
         function tokenize(input) {
@@ -223,13 +244,23 @@
             countElement.textContent = `${filteredVideos.length} video(s) found`;
         }
 
-        window.onload = loadVideos;
+        document.addEventListener('DOMContentLoaded', function() {
+            loadVideos();
+
+            // Add an event listener to the search input to handle the "Enter" key
+            document.getElementById('search-input').addEventListener('keypress', function(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    searchVideos();
+                }
+            });
+        });
 
     </script>
 </head>
 <body>
     <h1>a-bas-le-ciel Video Search</h1>
-    <div class="search-container">
+    <div class="search-container" id="search-container" style="display: none;">
         <div class="search-bar">
             <input type="text" id="search-input" placeholder="Search for videos...">
             <button onclick="searchVideos()">Search</button>
