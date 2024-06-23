@@ -203,6 +203,17 @@
             };
 
             const queryTokens = tokenize(query);
+
+            if (!options.isExact) {
+                // search will be too slow, and will likely match all videos, if there are words less than 3 letters
+                for (const token of queryTokens) {
+                    if (token.length < MIN_SEARCH_LENGTH) {
+                        alert(`When "Contains any word..." option is selected, each word needs to be at least ${MIN_SEARCH_LENGTH} characters long.`);
+                        return;
+                    }
+                }
+            }
+
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = '';
 
