@@ -115,6 +115,20 @@
         .column div {
             margin-bottom: 5px; /* Adjust spacing between items */
         }
+        #progress-bar-container {
+            width: 100%;
+            background-color: #f3f3f3;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 20px;
+            padding: 5px;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 20px;
+            background-color: #4caf50;
+            border-radius: 5px;
+        }
 
     </style>
     <script>
@@ -122,23 +136,48 @@
 
         let videos = [];
 
-        async function loadVideos() {
-            try {
-                const response = await fetch('videos.json');
+        function loadVideoData() {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const progressBarContainer = document.getElementById('progress-bar-container');
+                const progressBar = document.getElementById('progress-bar');
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
-                }
+                xhr.open('GET', 'videos.json', true);
 
-                const data = await response.json();
-                videos = data;
+                xhr.onprogress = function(event) {
+                    if (event.lengthComputable) {
+                        const percentComplete = (event.loaded / event.total) * 100;
+                        progressBar.style.width = `${percentComplete}%`;
+                        progressBarContainer.style.display = 'block';
+                    }
+                };
 
-                // Show the search form after data is loaded
-                document.getElementById('search-container').style.display = 'block';
-            } catch (error) {
+                xhr.onload = function() {
+                    progressBarContainer.style.display = 'none';
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            videos = data;
+                            document.getElementById('search-container').style.display = 'block';
+                            resolve();
+                        } catch (error) {
+                            reject('Failed to parse JSON response');
+                        }
+                    } else {
+                        reject(`HTTP error! Status: ${xhr.status}`);
+                    }
+                };
+
+                xhr.onerror = function() {
+                    progressBarContainer.style.display = 'none';
+                    reject('Request failed');
+                };
+
+                xhr.send();
+            }).catch(error => {
                 console.error('Error loading video data:', error);
                 showError('Failed to load video data. Please try again later.');
-            }
+            });
         }
 
         function showError(message) {
@@ -176,6 +215,10 @@
             return `${day.padStart(2, '0')} ${months[parseInt(month, 10) - 1]} ${year}`;
         }
 
+        function updateProgressBar(progress) {
+            const progressBar = document.getElementById('progress-bar');
+            progressBar.style.width = `${progress}%`;
+        }
 
         function searchVideos() {
             const query = document.getElementById('search-input').value.toLowerCase();
@@ -217,7 +260,12 @@
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = '';
 
-            const filteredVideos = videos.filter(video => {
+            document.getElementById('progress-bar-container').style.display = 'block';
+
+            const filteredVideos = videos.filter((video, index) => {
+                const progress = Math.round(((index + 1) / videos.length) * 100);
+                updateProgressBar(progress);
+
                 let searchContent = '';
                 if (options.title) searchContent += `${video.title} `;
                 if (options.description) searchContent += `${video.description} `;
@@ -232,6 +280,8 @@
                     return queryTokens.some(token => searchContent.includes(token));
                 }
             });
+
+            document.getElementById('progress-bar-container').style.display = 'none';
 
             filteredVideos.forEach(video => {
                 const videoElement = document.createElement('div');
@@ -256,7 +306,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            loadVideos();
+            loadVideoData();
 
             // Add an event listener to the search input to handle the "Enter" key
             document.getElementById('search-input').addEventListener('keypress', function(event) {
@@ -303,6 +353,9 @@
                 </div>
             </div>
         </form>
+    </div>
+    <div id="progress-bar-container" style="display: none;">
+        <div id="progress-bar"></div>
     </div>
     <div id="result-count"></div>
     <div id="results"></div>
