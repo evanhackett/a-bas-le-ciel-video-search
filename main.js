@@ -159,7 +159,6 @@ function searchVideos() {
 
     searchResults = filteredVideos;
 
-    displayResults();
     currentPage = 1;
     displayResults();
     updatePagination();
