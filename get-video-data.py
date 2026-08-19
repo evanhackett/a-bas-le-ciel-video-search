@@ -1,10 +1,15 @@
 import os
 import json
-import requests
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    AgeRestricted,
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    VideoUnplayable,
+)
 
 
 # Where the (gitignored) API key lives, alongside this script
@@ -15,6 +20,20 @@ CHANNEL_ID = 'UCWPKJM4CT6ES2BrUz9wbELw'
 
 # Placeholder stored when a video has no captions
 NO_TRANSCRIPT = 'Transcript not available.'
+
+# Reasons one particular video has no transcript. Deliberately excludes the
+# blocking errors (RequestBlocked, IpBlocked, PoTokenRequired): those affect every
+# video, so treating them as "no captions" would quietly overwrite videos.json with
+# placeholder text for the whole run. Better to crash and lose the run.
+# Do not replace this with the CouldNotRetrieveTranscript base class, which would
+# swallow the blocking errors too.
+NO_TRANSCRIPT_ERRORS = (
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    AgeRestricted,
+    VideoUnavailable,
+    VideoUnplayable,
+)
 
 
 def load_api_key():
@@ -38,6 +57,32 @@ def load_api_key():
         raise SystemExit(f'config.json has no "youtube_api_key" value set ({CONFIG_PATH}).')
 
     return key
+
+
+_transcript_api = None
+
+
+def get_transcript_api():
+    """One shared client, so its HTTP session is reused across videos."""
+    global _transcript_api
+    if _transcript_api is None:
+        _transcript_api = YouTubeTranscriptApi()
+    return _transcript_api
+
+
+def fetch_transcript(video_id):
+    """Transcript text for one video, or NO_TRANSCRIPT if it genuinely has none.
+
+    Blocking errors are not caught here on purpose; see NO_TRANSCRIPT_ERRORS.
+    """
+    try:
+        fetched = get_transcript_api().fetch(video_id)
+    except NO_TRANSCRIPT_ERRORS as error:
+        print(f'Transcript not available ({type(error).__name__}).')
+        return NO_TRANSCRIPT
+
+    return ' '.join(snippet.text for snippet in fetched)
+
 
 # Function to get video details
 def get_video_details(youtube, video_id):
@@ -64,13 +109,7 @@ def get_video_details(youtube, video_id):
 
 
 
-    transcript = ""
-    try:
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        transcript = " ".join([t['text'] for t in transcript_list])
-    except (NoTranscriptFound, TranscriptsDisabled):
-        print('Transcript not available.')
-        transcript = NO_TRANSCRIPT
+    transcript = fetch_transcript(video_id)
 
     return {
         "id": video_id,

@@ -3,6 +3,16 @@
 import json
 
 import pytest
+from youtube_transcript_api import (
+    AgeRestricted,
+    IpBlocked,
+    NoTranscriptFound,
+    PoTokenRequired,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    VideoUnplayable,
+)
 
 from conftest import FakeYouTube, video_api_response
 
@@ -132,28 +142,101 @@ class TestDedupeVideos:
         assert original['transcript'] == 'keep me'
 
 
+# --- fetch_transcript -----------------------------------------------------
+
+class FakeSnippet:
+    """A FetchedTranscriptSnippet, of which only .text is used."""
+
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeTranscriptApi:
+    """Stands in for a YouTubeTranscriptApi instance (the 1.x API)."""
+
+    def __init__(self, texts=None, error=None):
+        self.texts = texts or []
+        self.error = error
+        self.calls = []
+
+    def fetch(self, video_id):
+        self.calls.append(video_id)
+        if self.error:
+            raise self.error
+        return [FakeSnippet(text) for text in self.texts]
+
+
+def use_transcript_api(gvd, monkeypatch, fake):
+    monkeypatch.setattr(gvd, 'get_transcript_api', lambda: fake)
+    return fake
+
+
+# Reasons one video has no captions, which should yield the placeholder
+PER_VIDEO_FAILURES = [
+    pytest.param(TranscriptsDisabled('vid'), id='TranscriptsDisabled'),
+    pytest.param(NoTranscriptFound('vid', ['en'], None), id='NoTranscriptFound'),
+    pytest.param(AgeRestricted('vid'), id='AgeRestricted'),
+    pytest.param(VideoUnavailable('vid'), id='VideoUnavailable'),
+    pytest.param(VideoUnplayable('vid', 'reason', []), id='VideoUnplayable'),
+]
+
+# Failures that affect every video, which must never be mistaken for "no captions"
+BLOCKING_FAILURES = [
+    pytest.param(RequestBlocked('vid'), id='RequestBlocked'),
+    pytest.param(IpBlocked('vid'), id='IpBlocked'),
+    pytest.param(PoTokenRequired('vid'), id='PoTokenRequired'),
+]
+
+
+class TestFetchTranscript:
+    def test_joins_snippet_text_with_spaces(self, gvd, monkeypatch):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(['hello', 'there', 'world']))
+        assert gvd.fetch_transcript('vid') == 'hello there world'
+
+    def test_an_empty_transcript_is_an_empty_string(self, gvd, monkeypatch):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi([]))
+        assert gvd.fetch_transcript('vid') == ''
+
+    def test_passes_the_video_id_through(self, gvd, monkeypatch):
+        fake = use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(['x']))
+        gvd.fetch_transcript('abc123')
+        assert fake.calls == ['abc123']
+
+    @pytest.mark.parametrize('error', PER_VIDEO_FAILURES)
+    def test_a_video_without_captions_gets_the_placeholder(self, gvd, monkeypatch, error):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
+        assert gvd.fetch_transcript('vid') == gvd.NO_TRANSCRIPT
+
+    @pytest.mark.parametrize('error', BLOCKING_FAILURES)
+    def test_blocking_errors_are_not_swallowed(self, gvd, monkeypatch, error):
+        """A block affects every video in the run.
+
+        Recording it as "Transcript not available." would overwrite real
+        transcripts across the whole dataset, so it must crash instead.
+        """
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
+
+        with pytest.raises(type(error)):
+            gvd.fetch_transcript('vid')
+
+    def test_the_client_is_created_once_and_reused(self, gvd):
+        """One client keeps its HTTP session warm across videos."""
+        assert gvd.get_transcript_api() is gvd.get_transcript_api()
+
+
 # --- get_video_details ----------------------------------------------------
 
 class TestGetVideoDetails:
+    """Transcript fetching is stubbed here; it is covered by TestFetchTranscript."""
+
     def _no_transcript(self, gvd, monkeypatch):
-        """Make transcript lookup fail the way a captionless video does."""
-        class Failing:
-            @staticmethod
-            def get_transcript(video_id):
-                raise gvd.TranscriptsDisabled(video_id)
+        monkeypatch.setattr(gvd, 'fetch_transcript', lambda video_id: gvd.NO_TRANSCRIPT)
 
-        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi', Failing)
-
-    def _transcript(self, gvd, monkeypatch, segments):
-        class Working:
-            @staticmethod
-            def get_transcript(video_id):
-                return segments
-
-        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi', Working)
+    def _transcript(self, gvd, monkeypatch, text='a transcript'):
+        monkeypatch.setattr(gvd, 'fetch_transcript', lambda video_id: text)
 
     def test_maps_the_api_response_onto_a_record(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [{'text': 'hello'}, {'text': 'world'}])
+        self._transcript(gvd, monkeypatch, 'hello world')
         youtube = FakeYouTube(video_api_response(video_id='abc123', title='A title'))
 
         result = gvd.get_video_details(youtube, 'abc123')
@@ -165,19 +248,19 @@ class TestGetVideoDetails:
         assert result['transcript'] == 'hello world'
 
     def test_converts_the_iso_date_to_the_stored_format(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [])
+        self._transcript(gvd, monkeypatch)
         youtube = FakeYouTube(video_api_response(published_at='2024-06-20T23:48:17Z'))
 
         assert gvd.get_video_details(youtube, 'abc123')['upload_date'] == '20240620234817'
 
     def test_prefers_the_high_resolution_thumbnail(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [])
+        self._transcript(gvd, monkeypatch)
         youtube = FakeYouTube(video_api_response(video_id='xyz'))
 
         assert gvd.get_video_details(youtube, 'xyz')['thumbnail'].endswith('hqdefault.jpg')
 
     def test_falls_back_to_the_default_thumbnail(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [])
+        self._transcript(gvd, monkeypatch)
         youtube = FakeYouTube(video_api_response(
             video_id='xyz',
             thumbnails={'default': {'url': 'https://i.ytimg.com/vi/xyz/default.jpg'}},
@@ -192,13 +275,13 @@ class TestGetVideoDetails:
         assert gvd.get_video_details(youtube, 'abc123')['transcript'] == gvd.NO_TRANSCRIPT
 
     def test_returns_none_when_the_video_is_gone(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [])
+        self._transcript(gvd, monkeypatch)
         youtube = FakeYouTube({'items': []})
 
         assert gvd.get_video_details(youtube, 'deleted') is None
 
     def test_returns_none_when_the_response_has_no_items_key(self, gvd, monkeypatch):
-        self._transcript(gvd, monkeypatch, [])
+        self._transcript(gvd, monkeypatch)
         assert gvd.get_video_details(FakeYouTube({}), 'deleted') is None
 
 

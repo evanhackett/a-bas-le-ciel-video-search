@@ -1,0 +1,4 @@
+# Test-only dependencies. Install on top of requirements.txt:
+#   venv/bin/pip install -r requirements-dev.txt
+
+pytest==9.1.1

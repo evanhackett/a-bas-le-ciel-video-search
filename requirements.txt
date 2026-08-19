@@ -1,5 +1,14 @@
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
-requests
-youtube-transcript-api
+# Pinned deliberately.
+#
+# This file being unpinned is how the fetch script broke silently: a fresh
+# install picked up youtube-transcript-api 1.x, which removed the static
+# get_transcript() the script called. Bump these on purpose, then run the
+# tests, rather than letting an install decide for you.
+#
+# requests is not listed: the script does not import it, and
+# youtube-transcript-api pulls it in anyway.
+
+google-api-python-client==2.198.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+youtube-transcript-api==1.2.4
