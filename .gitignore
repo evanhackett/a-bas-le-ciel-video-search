@@ -1,1 +1,16 @@
 venv
+
+# Secrets — never commit
+config.json
+.env
+
+# Large scratch/source data that is not part of the deployed site.
+# (videos.json IS tracked and deliberately not listed here.)
+metadata.json
+playlist.json
+sample.json
+updated_videos.json
+
+__pycache__/
+*.pyc
+.DS_Store
