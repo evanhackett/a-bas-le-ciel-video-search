@@ -1,4 +1,13 @@
-const MIN_SEARCH_LENGTH = 3;
+// DOM wiring: loads the dataset, renders results, drives pagination.
+// The matching and formatting logic lives in search.js.
+
+import {
+    tokenize,
+    formatDate,
+    highlightText,
+    filterVideos,
+    validateQuery,
+} from './search.js';
 
 let videos = [];
 let currentPage = 1;
@@ -8,7 +17,7 @@ let query;
 let queryTokens;
 let options;
 
-function loadVideoData() {
+export function loadVideoData() {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         const progressBarContainer = document.getElementById('progress-bar-container');
@@ -52,54 +61,20 @@ function loadVideoData() {
     });
 }
 
-function showError(message) {
+export function showError(message) {
     const errorDiv = document.createElement('div');
     errorDiv.textContent = message;
     errorDiv.style.color = 'red';
     document.body.insertBefore(errorDiv, document.body.firstChild);
 }
 
-function tokenize(input) {
-    return input.trim().toLowerCase().split(/\s+/);
-}
-
-function highlightText(text, queryTokens) {
-    let highlightedText = text;
-    queryTokens.forEach(token => {
-        const regex = new RegExp(`(${token})`, 'gi');
-        highlightedText = highlightedText.replace(regex, '<span class="highlight">$1</span>');
-    });
-    return highlightedText;
-}
-
-function formatDate(dateString) {
-    const year = dateString.substr(0, 4);
-    const month = dateString.substr(4, 2);
-    const day = dateString.substr(6, 2);
-
-    // Array of month names
-    const months = [
-        'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-
-    // Format the date with padded day and month
-    return `${day.padStart(2, '0')} ${months[parseInt(month, 10) - 1]} ${year}`;
-}
-
-function updateProgressBar(progress) {
+export function updateProgressBar(progress) {
     const progressBar = document.getElementById('progress-bar');
     progressBar.style.width = `${progress}%`;
 }
 
-function searchVideos() {
-    query = document.getElementById('search-input').value.trim().toLowerCase();
-
-    if (query.length < MIN_SEARCH_LENGTH) {
-        alert(`Please enter at least ${MIN_SEARCH_LENGTH} characters for your search.`);
-        return;
-    }
-
+/** Read the current state of the search option controls. */
+function readOptions() {
     const optionsEl = document.getElementsByName('options');
 
     let selectedOption;
@@ -110,23 +85,23 @@ function searchVideos() {
         }
     }
 
-    options = {
+    return {
         title: document.getElementById('titleCheckbox').checked,
         description: document.getElementById('descriptionCheckbox').checked,
         transcript: document.getElementById('transcriptCheckbox').checked,
         isExact: selectedOption === 'exact',
     };
+}
 
+export function searchVideos() {
+    query = document.getElementById('search-input').value.trim().toLowerCase();
+    options = readOptions();
     queryTokens = tokenize(query);
 
-    if (!options.isExact) {
-        // search will be too slow, and will likely match all videos, if there are words less than 3 letters
-        for (const token of queryTokens) {
-            if (token.length < MIN_SEARCH_LENGTH) {
-                alert(`When "Contains any word..." option is selected, each word needs to be at least ${MIN_SEARCH_LENGTH} characters long.`);
-                return;
-            }
-        }
+    const problem = validateQuery(query, queryTokens, options);
+    if (problem) {
+        alert(problem);
+        return;
     }
 
     searchResults = [];
@@ -136,41 +111,24 @@ function searchVideos() {
 
     document.getElementById('progress-bar-container').style.display = 'block';
 
-    const filteredVideos = videos.filter((video, index) => {
-        const progress = Math.round(((index + 1) / videos.length) * 100);
-        updateProgressBar(progress);
-
-        let searchContent = '';
-        if (options.title) searchContent += `${video.title} `;
-        if (options.description) searchContent += `${video.description} `;
-        if (options.transcript) searchContent += `${video.transcript} `;
-        searchContent = searchContent.toLowerCase();
-
-        if (options.isExact) {
-            // Exact phrase match
-            return searchContent.includes(query);
-        } else {
-            // Partial match
-            return queryTokens.some(token => searchContent.includes(token));
-        }
-    });
+    searchResults = filterVideos(videos, query, queryTokens, options, updateProgressBar);
 
     document.getElementById('progress-bar-container').style.display = 'none';
-
-    searchResults = filteredVideos;
 
     currentPage = 1;
     displayResults();
     updatePagination();
 }
 
-function displayResults() {
+export function displayResults() {
     const resultsContainer = document.getElementById('results');
     resultsContainer.innerHTML = '';
 
     const startIndex = (currentPage - 1) * resultsPerPage;
     const endIndex = Math.min(startIndex + resultsPerPage, searchResults.length);
     const currentResults = searchResults.slice(startIndex, endIndex);
+
+    const highlightTokens = options.isExact ? [query] : queryTokens;
 
     currentResults.forEach(video => {
         const videoElement = document.createElement('div');
@@ -179,12 +137,12 @@ function displayResults() {
             <div class="result-left">
                 <img src="${video.thumbnail}" alt="Thumbnail">
                 <p>${formatDate(video.upload_date)} - <a href="${video.url}" target="_blank">Watch Video on YouTube</a></p>
-                <h3>${highlightText(video.title, options.isExact ? [query] : queryTokens)}</h3>
-                <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), options.isExact ? [query] : queryTokens)}</p>
+                <h3>${highlightText(video.title, highlightTokens)}</h3>
+                <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), highlightTokens)}</p>
             </div>
             <div class="result-right">
                 <h3>Transcript</h3>
-                <p>${highlightText(video.transcript, options.isExact ? [query] : queryTokens)}</p>
+                <p>${highlightText(video.transcript, highlightTokens)}</p>
             </div>
         `;
         resultsContainer.appendChild(videoElement);
@@ -194,7 +152,7 @@ function displayResults() {
     resultCount.textContent = `Found ${searchResults.length} result(s)`;
 }
 
-function updatePagination() {
+export function updatePagination() {
     const totalPages = Math.ceil(searchResults.length / resultsPerPage);
     const paginationTop = document.getElementById('pagination-top');
     const paginationBot = document.getElementById('pagination-bottom');
@@ -206,10 +164,10 @@ function updatePagination() {
     Array.from(document.getElementsByClassName('first-button')).forEach(el => el.disabled = currentPage === 1);
     Array.from(document.getElementsByClassName('last-button')).forEach(el => el.disabled = currentPage === totalPages);
 
-    Array.from(document.getElementsByClassName('page-info')).forEach(el => el.textContent = `Page ${currentPage} of ${totalPages}`)
+    Array.from(document.getElementsByClassName('page-info')).forEach(el => el.textContent = `Page ${currentPage} of ${totalPages}`);
 }
 
-function firstPage() {
+export function firstPage() {
     if (currentPage !== 1) {
         currentPage = 1;
         displayResults();
@@ -217,7 +175,7 @@ function firstPage() {
     }
 }
 
-function prevPage() {
+export function prevPage() {
     if (currentPage > 1) {
         currentPage--;
         displayResults();
@@ -225,7 +183,7 @@ function prevPage() {
     }
 }
 
-function nextPage() {
+export function nextPage() {
     const totalPages = Math.ceil(searchResults.length / resultsPerPage);
     if (currentPage < totalPages) {
         currentPage++;
@@ -234,7 +192,7 @@ function nextPage() {
     }
 }
 
-function lastPage() {
+export function lastPage() {
     const totalPages = Math.ceil(searchResults.length / resultsPerPage);
     if (currentPage !== totalPages) {
         currentPage = totalPages;
@@ -243,33 +201,49 @@ function lastPage() {
     }
 }
 
-
-function changeResultsPerPage() {
-  resultsPerPage = parseInt(document.getElementById('results-per-page').value);
-  currentPage = 1;
-  displayResults();
-  updatePagination();
+export function changeResultsPerPage() {
+    resultsPerPage = parseInt(document.getElementById('results-per-page').value);
+    currentPage = 1;
+    displayResults();
+    updatePagination();
 }
 
-// scroll to top of page if they click one of the bottom pagination buttons
-const paginationBottom = document.getElementById('pagination-bottom');
-paginationBottom.addEventListener('click', (event) => {
-    const isButton = event.target.nodeName === 'BUTTON';
-    if (!isButton) {
-        return;
-    }
+/** Attach every event listener. Replaces the old inline onclick attributes. */
+export function wireEvents() {
+    document.getElementById('search-button').addEventListener('click', searchVideos);
 
-    window.scrollTo({top: 0});
-});
-
-document.addEventListener('DOMContentLoaded', function() {
-    loadVideoData();
-
-    // Add an event listener to the search input to handle the "Enter" key
     document.getElementById('search-input').addEventListener('keypress', function(event) {
         if (event.key === 'Enter') {
             event.preventDefault();
             searchVideos();
         }
     });
-});
+
+    document.getElementById('results-per-page').addEventListener('change', changeResultsPerPage);
+
+    const buttons = [
+        ['first-button', firstPage],
+        ['prev-button', prevPage],
+        ['next-button', nextPage],
+        ['last-button', lastPage],
+    ];
+    for (const [className, handler] of buttons) {
+        Array.from(document.getElementsByClassName(className))
+            .forEach(el => el.addEventListener('click', handler));
+    }
+
+    // Scroll to the top if they click one of the bottom pagination buttons
+    document.getElementById('pagination-bottom').addEventListener('click', (event) => {
+        if (event.target.nodeName === 'BUTTON') {
+            window.scrollTo({ top: 0 });
+        }
+    });
+}
+
+export function init() {
+    wireEvents();
+    return loadVideoData();
+}
+
+// Module scripts are deferred, so the DOM is already parsed when this runs.
+init();

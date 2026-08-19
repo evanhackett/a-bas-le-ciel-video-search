@@ -10,7 +10,7 @@
     <div class="search-container" id="search-container" style="display: none;">
         <div class="search-bar">
             <input type="text" id="search-input" placeholder="Search for videos...">
-            <button onclick="searchVideos()">Search</button>
+            <button id="search-button">Search</button>
         </div>
         <form id="search-options" class="options-form">
             <div class="column">
@@ -45,12 +45,12 @@
     </div>
     <div id="result-count"></div>
     <div id="pagination-top" class="pagination" style="display: none;">
-        <button class="first-button" onclick="firstPage()">First</button>
-        <button class="prev-button" onclick="prevPage()">Previous</button>
+        <button class="first-button">First</button>
+        <button class="prev-button">Previous</button>
         <span class="page-info"></span>
-        <button class="next-button" onclick="nextPage()">Next</button>
-        <button class="last-button" onclick="lastPage()">Last</button>
-        <select id="results-per-page" onchange="changeResultsPerPage()">
+        <button class="next-button">Next</button>
+        <button class="last-button">Last</button>
+        <select id="results-per-page">
             <option value="10" selected>10 per page</option>
             <option value="20">20 per page</option>
             <option value="50">50 per page</option>
@@ -59,14 +59,14 @@
     </div>
     <div id="results"></div>
     <div id="pagination-bottom" class="pagination" style="display: none;">
-        <button class="first-button" onclick="firstPage()">First</button>
-        <button class="prev-button" onclick="prevPage()">Previous</button>
+        <button class="first-button">First</button>
+        <button class="prev-button">Previous</button>
         <span class="page-info"></span>
-        <button class="next-button" onclick="nextPage()">Next</button>
-        <button class="last-button" onclick="lastPage()">Last</button>
+        <button class="next-button">Next</button>
+        <button class="last-button">Last</button>
     </div>
 
-    <script src="main.js"></script>
+    <script type="module" src="main.js"></script>
 </body>
 
 </html>
