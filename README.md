@@ -69,9 +69,12 @@ npm test                 # JavaScript  (node --test + jsdom)
 venv/bin/pytest          # Python      (pytest)
 ```
 
-First time on a fresh clone: `npm install` for the JS side. The Python side needs
-only `pip install pytest` into the existing venv — see the venv warning below
-before touching it.
+First time on a fresh clone:
+
+```bash
+npm install                                    # JS test deps (jsdom)
+venv/bin/pip install -r requirements-dev.txt   # Python test deps (pytest)
+```
 
 | Suite | Covers |
 | --- | --- |
@@ -133,23 +136,37 @@ To check whether a past run was ever promoted: if `videos.json` and
 md5 videos.json updated_videos.json
 ```
 
-### Use the committed venv — do not rebuild it
+### Rebuilding the environment
 
-`requirements.txt` has **no version pins**, and the script will not survive a fresh
-install. `venv/` has `youtube-transcript-api==0.6.2`; version 1.0 (2025) removed the
-static `YouTubeTranscriptApi.get_transcript()` that `get_video_details()` calls and
-relocated the exception classes that are imported from `youtube_transcript_api._errors`.
-A clean `pip install -r requirements.txt` today installs the new API and the script
-raises on import.
+`requirements.txt` is pinned, so a fresh environment is reproducible:
 
-If you ever do need to rebuild the environment, pin these first:
-
-```
-youtube-transcript-api==0.6.2
-google-api-python-client==2.134.0
+```bash
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/pip install -r requirements-dev.txt   # only needed to run the tests
 ```
 
-...or port the two call sites to the 1.x instance-based API.
+`venv/` is gitignored and is not a backup of anything — the pins are.
+
+**Bump versions deliberately, then run the tests.** Leaving this file unpinned is
+how the script broke once already: `youtube-transcript-api` 1.0 removed the static
+`get_transcript()` it called, and because the venv was never rebuilt, nothing
+surfaced the breakage until someone tried to run it. Pinning stops an install from
+changing behaviour, but it does not freeze YouTube — a version that works today can
+stop working, so if transcripts start failing, upgrading is the first thing to try.
+
+### Why transcript errors are not all caught
+
+`fetch_transcript()` catches only the per-video reasons a transcript is missing
+(`TranscriptsDisabled`, `NoTranscriptFound`, `AgeRestricted`, `VideoUnavailable`,
+`VideoUnplayable`) and records the placeholder for them.
+
+Blocking errors — `RequestBlocked`, `IpBlocked`, `PoTokenRequired` — are
+deliberately left to crash the run. They affect *every* video, so treating one as
+"no captions" would write placeholder text over real transcripts for the entire
+batch and silently degrade `videos.json`. A lost run is cheap; a corrupted dataset
+is not. For the same reason, do not simplify that tuple to the
+`CouldNotRetrieveTranscript` base class, which would catch the blocking errors too.
 
 ### API key
 
