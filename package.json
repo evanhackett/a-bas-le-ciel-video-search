@@ -1,0 +1,13 @@
+{
+  "name": "a-bas-le-ciel-video-search",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-text search over the a-bas-le-ciel YouTube channel archive",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

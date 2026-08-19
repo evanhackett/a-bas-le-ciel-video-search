@@ -1,0 +1,309 @@
+// Tests for main.js: dataset loading, rendering, pagination and event wiring.
+// Each test gets its own jsdom window; see helpers.mjs.
+
+import { test, describe, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { loadApp, FakeXHR, makeVideo, makeVideos } from './helpers.mjs';
+
+/** Let pending promise callbacks (the loadVideoData catch chain) run. */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+let app;
+
+beforeEach(async () => {
+    app = await loadApp();
+});
+
+afterEach(() => {
+    app?.cleanup();
+});
+
+describe('loading the dataset', () => {
+    test('requests videos.json on startup', () => {
+        assert.equal(FakeXHR.last.method, 'GET');
+        assert.equal(FakeXHR.last.url, 'videos.json');
+        assert.ok(FakeXHR.last.sent);
+    });
+
+    test('keeps the search UI hidden until data arrives', () => {
+        assert.equal(app.$('#search-container').style.display, 'none');
+    });
+
+    test('reveals the search UI once data arrives', () => {
+        app.deliverVideos(makeVideos(2));
+        assert.equal(app.$('#search-container').style.display, 'block');
+    });
+
+    test('hides the progress bar when the load finishes', () => {
+        app.deliverVideos(makeVideos(2));
+        assert.equal(app.$('#progress-bar-container').style.display, 'none');
+    });
+
+    test('shows an error banner on an HTTP error', async () => {
+        FakeXHR.last.httpError(404);
+        await tick();
+        assert.match(app.document.body.firstChild.textContent, /Failed to load video data/);
+    });
+
+    test('shows an error banner when the JSON is malformed', async () => {
+        FakeXHR.last.succeed('{ not valid json');
+        await tick();
+        assert.match(app.document.body.firstChild.textContent, /Failed to load video data/);
+    });
+
+    test('shows an error banner on a network failure', async () => {
+        FakeXHR.last.networkError();
+        await tick();
+        assert.match(app.document.body.firstChild.textContent, /Failed to load video data/);
+    });
+
+    test('leaves the search UI hidden when the load fails', async () => {
+        FakeXHR.last.httpError(500);
+        await tick();
+        assert.equal(app.$('#search-container').style.display, 'none');
+    });
+});
+
+describe('load progress bar', () => {
+    test('grows the bar as bytes arrive', () => {
+        FakeXHR.last.progress(50, 200);
+        assert.equal(app.$('#progress-bar').style.width, '25%');
+        assert.equal(app.$('#progress-bar-container').style.display, 'block');
+    });
+
+    test('ignores progress events without a computable length', () => {
+        FakeXHR.last.progress(50, 200);
+        assert.equal(app.$('#progress-bar').style.width, '25%');
+
+        // A chunked response reports no total; the bar should hold its position
+        FakeXHR.last.progress(999, 0, false);
+        assert.equal(app.$('#progress-bar').style.width, '25%');
+    });
+
+    // Known bug (see README): GitHub Pages gzips videos.json, so event.total is the
+    // compressed size (~17.9MB) while event.loaded counts decompressed bytes (~52MB).
+    // The bar reaches ~291% and snaps to full immediately. Locally there is no gzip,
+    // which is why it only misbehaves on the deployed site.
+    test('caps the bar at 100% when the server reports a compressed length', { todo: true }, () => {
+        FakeXHR.last.progress(52_258_072, 17_969_259);
+        const width = parseFloat(app.$('#progress-bar').style.width);
+        assert.ok(width <= 100, `bar reached ${width}%`);
+    });
+});
+
+describe('searching', () => {
+    beforeEach(() => {
+        app.deliverVideos([
+            makeVideo({ id: 'a', title: 'Antinatalism', description: 'a discussion of ethics', transcript: 'spoken words' }),
+            makeVideo({ id: 'b', title: 'Chromebook', description: 'a discussion of hardware', transcript: 'other words' }),
+            makeVideo({ id: 'c', title: 'Ecology', description: 'a discussion of nature', transcript: 'green things' }),
+        ]);
+    });
+
+    test('renders one card per match', () => {
+        app.search('Antinatalism');
+        assert.equal(app.cards().length, 1);
+        assert.deepEqual(app.cardTitles(), ['Antinatalism']);
+    });
+
+    test('reports the number of results', () => {
+        app.search('discussion');
+        assert.equal(app.$('#result-count').textContent, 'Found 3 result(s)');
+    });
+
+    test('renders nothing when there is no match', () => {
+        app.search('zebra');
+        assert.equal(app.cards().length, 0);
+        assert.equal(app.$('#result-count').textContent, 'Found 0 result(s)');
+    });
+
+    test('exact mode requires the whole phrase', () => {
+        app.search('ecology antinatalism', { exact: true });
+        assert.equal(app.cards().length, 0);
+    });
+
+    test('any-word mode matches either token', () => {
+        app.search('ecology antinatalism', { exact: false });
+        assert.equal(app.cards().length, 2);
+    });
+
+    test('honours the field checkboxes', () => {
+        app.search('ethics', { title: true, description: false, transcript: false });
+        assert.equal(app.cards().length, 0);
+
+        app.search('ethics', { title: true, description: true, transcript: false });
+        assert.equal(app.cards().length, 1);
+    });
+
+    test('searches transcripts', () => {
+        app.search('green things');
+        assert.deepEqual(app.cardTitles(), ['Ecology']);
+    });
+
+    test('highlights the matched text', () => {
+        app.search('Ecology');
+        assert.match(app.cards()[0].innerHTML, /<span class="highlight">Ecology<\/span>/);
+    });
+
+    test('renders the thumbnail and a link to the video', () => {
+        app.search('Ecology');
+        const card = app.cards()[0];
+        assert.ok(card.querySelector('img').src.includes('/vi/c/'));
+        assert.equal(card.querySelector('a').href, 'https://www.youtube.com/watch?v=c');
+    });
+
+    test('shows the formatted upload date', () => {
+        app.search('Ecology');
+        assert.match(app.cards()[0].textContent, /01 January 2024/);
+    });
+
+    test('replaces results from the previous search', () => {
+        app.search('Antinatalism');
+        assert.equal(app.cards().length, 1);
+        app.search('zebra');
+        assert.equal(app.cards().length, 0);
+    });
+
+    test('alerts and searches nothing when the query is too short', () => {
+        app.search('ab');
+        assert.equal(app.alerts.length, 1);
+        assert.match(app.alerts[0], /at least 3 characters/);
+        assert.equal(app.cards().length, 0);
+    });
+
+    test('alerts when an any-word query contains a short word', () => {
+        app.search('ab ecology', { exact: false });
+        assert.equal(app.alerts.length, 1);
+        assert.match(app.alerts[0], /each word needs to be at least 3/);
+    });
+});
+
+describe('pagination', () => {
+    // 25 videos titled "Video 1".."Video 25"; searching "video" matches all of them.
+    beforeEach(() => {
+        app.deliverVideos(makeVideos(25));
+        app.search('video');
+    });
+
+    test('splits results into pages of ten', () => {
+        assert.equal(app.cards().length, 10);
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+    });
+
+    test('shows the pagination controls', () => {
+        assert.equal(app.$('#pagination-top').style.display, 'block');
+        assert.equal(app.$('#pagination-bottom').style.display, 'block');
+    });
+
+    test('disables first/previous on the opening page', () => {
+        assert.ok(app.$('.first-button').disabled);
+        assert.ok(app.$('.prev-button').disabled);
+        assert.ok(!app.$('.next-button').disabled);
+    });
+
+    test('next advances one page', () => {
+        app.app.nextPage();
+        assert.equal(app.pageInfo(), 'Page 2 of 3');
+        assert.deepEqual(app.cardTitles()[0], 'Video 11');
+    });
+
+    test('previous goes back one page', () => {
+        app.app.nextPage();
+        app.app.prevPage();
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+        assert.equal(app.cardTitles()[0], 'Video 1');
+    });
+
+    test('last jumps to the final page, which holds the remainder', () => {
+        app.app.lastPage();
+        assert.equal(app.pageInfo(), 'Page 3 of 3');
+        assert.equal(app.cards().length, 5);
+        assert.equal(app.cardTitles().at(-1), 'Video 25');
+    });
+
+    test('first jumps back to the opening page', () => {
+        app.app.lastPage();
+        app.app.firstPage();
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+    });
+
+    test('disables next/last on the final page', () => {
+        app.app.lastPage();
+        assert.ok(app.$('.next-button').disabled);
+        assert.ok(app.$('.last-button').disabled);
+    });
+
+    test('does not advance past the final page', () => {
+        app.app.lastPage();
+        app.app.nextPage();
+        assert.equal(app.pageInfo(), 'Page 3 of 3');
+    });
+
+    test('does not retreat before the first page', () => {
+        app.app.prevPage();
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+    });
+
+    test('hides the bottom controls when everything fits on one page', () => {
+        app.search('Video 7'); // matches only "Video 7"
+        assert.equal(app.$('#pagination-bottom').style.display, 'none');
+    });
+
+    test('changing results per page resizes and returns to page 1', () => {
+        app.app.lastPage();
+        app.$('#results-per-page').value = '20';
+        app.$('#results-per-page').dispatchEvent(new app.window.Event('change'));
+
+        assert.equal(app.cards().length, 20);
+        assert.equal(app.pageInfo(), 'Page 1 of 2');
+    });
+
+    // Current behaviour with no results is "Page 1 of 0", and next/last stay
+    // enabled because currentPage (1) never equals totalPages (0).
+    test('disables next/last when there are no results', { todo: true }, () => {
+        app.search('zebra');
+        assert.ok(app.$('.next-button').disabled);
+        assert.ok(app.$('.last-button').disabled);
+    });
+});
+
+describe('event wiring', () => {
+    beforeEach(() => {
+        app.deliverVideos(makeVideos(25));
+    });
+
+    test('the search button runs a search', () => {
+        app.$('#search-input').value = 'Video 3';
+        app.$('#search-button').click();
+        assert.ok(app.cards().length > 0);
+    });
+
+    test('pressing Enter in the search box runs a search', () => {
+        app.$('#search-input').value = 'Video 3';
+        app.$('#search-input').dispatchEvent(
+            new app.window.KeyboardEvent('keypress', { key: 'Enter', bubbles: true }),
+        );
+        assert.ok(app.cards().length > 0);
+    });
+
+    test('another key does not run a search', () => {
+        app.$('#search-input').value = 'Video 3';
+        app.$('#search-input').dispatchEvent(
+            new app.window.KeyboardEvent('keypress', { key: 'a', bubbles: true }),
+        );
+        assert.equal(app.cards().length, 0);
+    });
+
+    test('the next button advances the page', () => {
+        app.search('video');
+        app.$('#pagination-top .next-button').click();
+        assert.equal(app.pageInfo(), 'Page 2 of 3');
+    });
+
+    test('the bottom pagination buttons are wired too', () => {
+        app.search('video');
+        app.$('#pagination-bottom .next-button').click();
+        assert.equal(app.pageInfo(), 'Page 2 of 3');
+    });
+});

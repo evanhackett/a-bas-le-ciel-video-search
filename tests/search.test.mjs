@@ -1,0 +1,223 @@
+// Tests for search.js. Pure logic, so no DOM and no jsdom.
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+    MIN_SEARCH_LENGTH,
+    tokenize,
+    formatDate,
+    highlightText,
+    searchableContent,
+    matchesQuery,
+    filterVideos,
+    validateQuery,
+} from '../search.js';
+
+const ALL_FIELDS = { title: true, description: true, transcript: true, isExact: true };
+const ANY_WORD = { ...ALL_FIELDS, isExact: false };
+
+const video = (over = {}) => ({
+    title: 'Antinatalism and ecology',
+    description: 'A discussion of ethics',
+    transcript: 'the spoken words of the video',
+    ...over,
+});
+
+describe('tokenize', () => {
+    test('splits on whitespace and lowercases', () => {
+        assert.deepEqual(tokenize('Hello World'), ['hello', 'world']);
+    });
+
+    test('collapses runs of whitespace', () => {
+        assert.deepEqual(tokenize('a   b\tc'), ['a', 'b', 'c']);
+    });
+
+    test('trims leading and trailing whitespace', () => {
+        assert.deepEqual(tokenize('  padded  '), ['padded']);
+    });
+
+    test('a single word yields one token', () => {
+        assert.deepEqual(tokenize('solo'), ['solo']);
+    });
+});
+
+describe('formatDate', () => {
+    test('formats a full 14-digit timestamp', () => {
+        assert.equal(formatDate('20240620234817'), '20 June 2024');
+    });
+
+    test('ignores the time portion', () => {
+        assert.equal(formatDate('20240620000000'), '20 June 2024');
+    });
+
+    test('handles January and December (month index boundaries)', () => {
+        assert.equal(formatDate('20220101000000'), '01 January 2022');
+        assert.equal(formatDate('20221231000000'), '31 December 2022');
+    });
+
+    test('keeps the zero-padded day', () => {
+        assert.equal(formatDate('20140212000000'), '12 February 2014');
+        assert.equal(formatDate('20140202000000'), '02 February 2014');
+    });
+});
+
+describe('highlightText', () => {
+    test('wraps a match in a highlight span', () => {
+        assert.equal(
+            highlightText('hello world', ['world']),
+            'hello <span class="highlight">world</span>',
+        );
+    });
+
+    test('matches case-insensitively but preserves the original casing', () => {
+        assert.equal(
+            highlightText('Hello World', ['world']),
+            'Hello <span class="highlight">World</span>',
+        );
+    });
+
+    test('highlights every occurrence', () => {
+        const out = highlightText('cat and cat', ['cat']);
+        assert.equal(out.match(/class="highlight"/g).length, 2);
+    });
+
+    test('applies each token in turn', () => {
+        const out = highlightText('alpha beta', ['alpha', 'beta']);
+        assert.ok(out.includes('>alpha<'));
+        assert.ok(out.includes('>beta<'));
+    });
+
+    test('leaves text without a match untouched', () => {
+        assert.equal(highlightText('nothing here', ['absent']), 'nothing here');
+    });
+
+    // Known bug: the token is interpolated straight into a RegExp, so regex
+    // metacharacters throw instead of being matched literally. Marked todo so it
+    // is recorded without failing the suite; it will pass once escaped.
+    test('treats regex metacharacters as literal text', { todo: true }, () => {
+        assert.equal(
+            highlightText('a (parenthesis) here', ['(']),
+            'a <span class="highlight">(</span>parenthesis) here',
+        );
+    });
+});
+
+describe('searchableContent', () => {
+    test('includes only the enabled fields', () => {
+        const content = searchableContent(video(), {
+            title: true, description: false, transcript: false,
+        });
+        assert.ok(content.includes('antinatalism'));
+        assert.ok(!content.includes('ethics'));
+        assert.ok(!content.includes('spoken'));
+    });
+
+    test('combines all three when all are enabled', () => {
+        const content = searchableContent(video(), ALL_FIELDS);
+        assert.ok(content.includes('antinatalism'));
+        assert.ok(content.includes('ethics'));
+        assert.ok(content.includes('spoken'));
+    });
+
+    test('lowercases its output', () => {
+        const content = searchableContent(video({ title: 'SHOUTING' }), ALL_FIELDS);
+        assert.ok(content.includes('shouting'));
+    });
+
+    test('is empty when no field is enabled', () => {
+        const content = searchableContent(video(), {
+            title: false, description: false, transcript: false,
+        });
+        assert.equal(content, '');
+    });
+});
+
+describe('matchesQuery', () => {
+    test('exact mode matches a contiguous phrase', () => {
+        assert.ok(matchesQuery(video(), 'antinatalism and ecology', [], ALL_FIELDS));
+    });
+
+    test('exact mode rejects words that appear out of order', () => {
+        assert.ok(!matchesQuery(video(), 'ecology antinatalism', [], ALL_FIELDS));
+    });
+
+    test('any-word mode matches when a single token hits', () => {
+        assert.ok(matchesQuery(video(), 'ecology zebra', ['ecology', 'zebra'], ANY_WORD));
+    });
+
+    test('any-word mode rejects when no token hits', () => {
+        assert.ok(!matchesQuery(video(), 'zebra giraffe', ['zebra', 'giraffe'], ANY_WORD));
+    });
+
+    test('respects disabled fields', () => {
+        const titleOnly = { title: true, description: false, transcript: false, isExact: true };
+        assert.ok(!matchesQuery(video(), 'ethics', [], titleOnly));
+        assert.ok(matchesQuery(video(), 'ethics', [], ALL_FIELDS));
+    });
+
+    test('matches a term found only in the transcript', () => {
+        assert.ok(matchesQuery(video(), 'spoken words', [], ALL_FIELDS));
+    });
+});
+
+describe('filterVideos', () => {
+    const videos = [
+        video({ title: 'first', description: '', transcript: '' }),
+        video({ title: 'second', description: '', transcript: '' }),
+        video({ title: 'third', description: '', transcript: '' }),
+    ];
+
+    test('returns only matching videos', () => {
+        const out = filterVideos(videos, 'second', [], ALL_FIELDS);
+        assert.equal(out.length, 1);
+        assert.equal(out[0].title, 'second');
+    });
+
+    test('returns an empty array when nothing matches', () => {
+        assert.deepEqual(filterVideos(videos, 'absent', [], ALL_FIELDS), []);
+    });
+
+    test('reports progress once per video, ending at 100', () => {
+        const seen = [];
+        filterVideos(videos, 'absent', [], ALL_FIELDS, (p) => seen.push(p));
+        assert.equal(seen.length, 3);
+        assert.equal(seen.at(-1), 100);
+    });
+
+    test('works without a progress callback', () => {
+        assert.doesNotThrow(() => filterVideos(videos, 'first', [], ALL_FIELDS));
+    });
+
+    test('does not mutate the input', () => {
+        const before = [...videos];
+        filterVideos(videos, 'first', [], ALL_FIELDS);
+        assert.deepEqual(videos, before);
+    });
+});
+
+describe('validateQuery', () => {
+    test('accepts a long enough exact phrase', () => {
+        assert.equal(validateQuery('ecology', ['ecology'], ALL_FIELDS), null);
+    });
+
+    test('rejects a query shorter than the minimum', () => {
+        const problem = validateQuery('ab', ['ab'], ALL_FIELDS);
+        assert.ok(problem);
+        assert.match(problem, /at least 3 characters/);
+    });
+
+    test('rejects a short word in any-word mode', () => {
+        const problem = validateQuery('ab cdef', ['ab', 'cdef'], ANY_WORD);
+        assert.ok(problem);
+        assert.match(problem, /each word needs to be at least 3/);
+    });
+
+    test('allows short words in exact mode, where they are part of a phrase', () => {
+        assert.equal(validateQuery('a b cdef', ['a', 'b', 'cdef'], ALL_FIELDS), null);
+    });
+
+    test('MIN_SEARCH_LENGTH is the documented 3', () => {
+        assert.equal(MIN_SEARCH_LENGTH, 3);
+    });
+});

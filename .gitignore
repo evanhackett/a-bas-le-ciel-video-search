@@ -13,4 +13,6 @@ updated_videos.json
 
 __pycache__/
 *.pyc
+.pytest_cache/
+node_modules/
 .DS_Store
