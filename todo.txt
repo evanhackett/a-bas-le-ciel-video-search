@@ -1,0 +1,12 @@
+todo
+
+deploy script to server
+
+on initial load, show all videos in search results
+
+investigate why progress bar for loading json works on localhost but not on gh-pages.
+
+Fix "results per page" dropdown and pagination controls layout on mobile and small screens
+
+add an "contains all words" which captures a different search result than "any" or "exact".
+
