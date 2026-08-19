@@ -8,21 +8,35 @@ won't do for you.
 
 ## How it works
 
-A static site with no build step, no server, and no dependencies. The browser
-downloads the entire dataset and searches it in memory.
+A static site with no build step and no server. The browser downloads the entire
+dataset and searches it in memory. The JS is plain ES modules, which browsers load
+natively — there is nothing to compile or bundle.
 
 | File | Role |
 | --- | --- |
-| `index.html` | Markup. Handlers are inline `onclick` attributes. |
-| `main.js` | Fetches `videos.json`, runs the search, renders results, paginates. |
+| `index.html` | Markup. Loads `main.js` as `<script type="module">`. |
+| `search.js` | Pure logic: matching, tokenizing, date formatting, highlighting. No DOM. |
+| `main.js` | DOM: fetches `videos.json`, renders results, paginates, wires events. |
 | `styles.css` | All styling. |
 | `videos.json` | **The dataset.** ~52 MB, one object per video. |
 
-`loadVideoData()` XHRs `videos.json` into a global array, then `searchVideos()`
+`loadVideoData()` XHRs `videos.json` into a module-level array, then `searchVideos()`
 filters it with plain substring matching over whichever of
 title / description / transcript you've checked. There is no search index — it's a
 linear scan over every video on every query. At the current dataset size that's
 fast enough to feel instant.
+
+The split exists so the matching logic can be tested without a browser. Keep
+`search.js` free of DOM access; everything that touches the page belongs in
+`main.js`. Event handlers are attached in `wireEvents()` — do not add inline
+`onclick` attributes, as module scope is not global and they will not resolve.
+
+**Previewing locally needs a web server.** ES modules are blocked over `file://`,
+so opening `index.html` by double-clicking will not work:
+
+```bash
+python3 -m http.server 8000   # then visit http://localhost:8000
+```
 
 Each record looks like:
 
@@ -45,6 +59,43 @@ Each record looks like:
 
 GitHub Pages, served from the root of `main`. **Pushing to `main` is the deploy.**
 There is no build, no CI, and no gh-pages branch.
+
+## Tests
+
+Two suites, run separately.
+
+```bash
+npm test                 # JavaScript  (node --test + jsdom)
+venv/bin/pytest          # Python      (pytest)
+```
+
+First time on a fresh clone: `npm install` for the JS side. The Python side needs
+only `pip install pytest` into the existing venv — see the venv warning below
+before touching it.
+
+| Suite | Covers |
+| --- | --- |
+| `tests/search.test.mjs` | `search.js` matching and formatting. Pure, no DOM, no jsdom. |
+| `tests/main.test.mjs` | `main.js` against a jsdom window built from the real `index.html`. |
+| `tests/test_get_video_data.py` | `get-video-data.py`: key loading, dedupe, API parsing, the merge. |
+| `tests/test_data_integrity.py` | The shipped `videos.json` itself. |
+
+`tests/helpers.mjs` builds a fresh window per test and swaps in a `FakeXHR`, so no
+test touches the network. Because `main.js` holds module-level state, each test
+re-imports it under a cache-busting query string for isolation.
+
+Some tests are marked `todo`: they describe behaviour that is known to be wrong
+and are reported without failing the run. They flip to passing when the bug is
+fixed. Currently these cover the regex-injection bug in `highlightText()`, the
+progress bar exceeding 100% on GitHub Pages, and the pagination buttons staying
+enabled when a search returns nothing.
+
+`test_data_integrity.py` runs against the real 52 MB dataset, so it catches
+problems the unit tests cannot — malformed dates, mismatched URLs, duplicate ids.
+**The duplicate-id check currently fails** on the 7 known duplicates; see
+[Known issues](#known-issues).
+
+Neither suite talks to the YouTube API or needs a key.
 
 ## Updating the data
 
@@ -175,13 +226,18 @@ You will see these locally but not in a fresh clone.
   only restyles the result cards. `.pagination` stays `display: flex` with no
   `flex-wrap`, so five buttons plus the page counter plus the results-per-page
   `<select>` run off the edge of a phone.
-- **`highlightText()` builds a `RegExp` directly from user input**, so searching for
-  `(`, `[`, or `*` throws.
+- **`highlightText()` builds a `RegExp` directly from user input** (`search.js`), so
+  searching for `(`, `[`, or `*` throws. Escaping the token fixes it. Covered by a
+  `todo` test.
+- **Pagination controls stay enabled when a search returns nothing.** With 0 results
+  `totalPages` is 0 while `currentPage` is 1, so the `currentPage === totalPages`
+  checks never disable next/last, and the counter reads "Page 1 of 0". Covered by a
+  `todo` test.
 - **Results are injected via `innerHTML` without escaping.** The data comes from the
   YouTube API rather than from users, so this is low risk in practice, but a video
   description containing markup will render as markup.
-- **The "contains any word" search is `.some()`**, despite an early commit message
-  calling it "all". There is no all-words option — see the todo.
+- **The "contains any word" search is `.some()`** in `matchesQuery()`, despite an
+  early commit message calling it "all". There is no all-words option — see the todo.
 
 ## Todo
 
