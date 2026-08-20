@@ -11,6 +11,10 @@ playlist.json
 sample.json
 updated_videos.json
 
+# Partial progress from an interrupted fetch run
+fetch-progress.json
+fetch-progress.json.tmp
+
 __pycache__/
 *.pyc
 .pytest_cache/

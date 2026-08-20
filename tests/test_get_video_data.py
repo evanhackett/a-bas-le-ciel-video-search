@@ -85,7 +85,12 @@ class TestLoadApiKey:
 # --- dedupe_videos --------------------------------------------------------
 
 def rec(video_id, **over):
-    base = {'id': video_id, 'title': f'title {video_id}', 'transcript': 'words'}
+    base = {
+        'id': video_id,
+        'title': f'title {video_id}',
+        'transcript': 'words',
+        'upload_date': '20240101000000',
+    }
     base.update(over)
     return base
 
@@ -285,153 +290,339 @@ class TestGetVideoDetails:
         assert gvd.get_video_details(FakeYouTube({}), 'deleted') is None
 
 
-# --- get_new_videos_from_channel ------------------------------------------
+# --- channel enumeration --------------------------------------------------
 
-class FakeSearch:
-    """Serves canned search().list() pages in order."""
+class FakeApiCall:
+    def __init__(self, response):
+        self._response = response
+
+    def execute(self):
+        return self._response
+
+
+class FakeChannels:
+    def __init__(self, response):
+        self._response = response
+        self.calls = []
+
+    def list(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeApiCall(self._response)
+
+
+class FakePlaylistItems:
+    """Serves canned playlistItems().list() pages in order."""
 
     def __init__(self, pages):
         self.pages = list(pages)
         self.calls = []
 
-    def search(self):
-        return self
-
     def list(self, **kwargs):
         self.calls.append(kwargs)
-        return self
-
-    def execute(self):
-        return self.pages.pop(0)
+        return FakeApiCall(self.pages.pop(0))
 
 
-def search_page(video_ids, next_page_token=None):
-    page = {'items': [{'id': {'videoId': v}} for v in video_ids]}
+class FakeYouTubeApi:
+    def __init__(self, channels=None, playlist_items=None):
+        self._channels = channels
+        self._playlist_items = playlist_items
+
+    def channels(self):
+        return self._channels
+
+    def playlistItems(self):
+        return self._playlist_items
+
+
+def channel_response(uploads_id='UUabc'):
+    return {'items': [{'contentDetails': {'relatedPlaylists': {'uploads': uploads_id}}}]}
+
+
+def playlist_page(video_ids, next_page_token=None):
+    page = {'items': [{'contentDetails': {'videoId': v}} for v in video_ids]}
     if next_page_token:
         page['nextPageToken'] = next_page_token
     return page
 
 
-class TestGetNewVideosFromChannel:
-    def _setup(self, gvd, monkeypatch, pages, details):
-        fake = FakeSearch(pages)
-        monkeypatch.setattr(gvd, 'build', lambda *a, **k: fake)
-        monkeypatch.setattr(gvd, 'load_api_key', lambda: 'test-key')
-        monkeypatch.setattr(gvd, 'get_video_details', lambda youtube, vid: details(vid))
-        return fake
+class TestGetUploadsPlaylistId:
+    def test_returns_the_uploads_playlist(self, gvd):
+        youtube = FakeYouTubeApi(channels=FakeChannels(channel_response('UUxyz')))
+        assert gvd.get_uploads_playlist_id(youtube, 'chan') == 'UUxyz'
 
-    def test_collects_every_video_on_a_single_page(self, gvd, monkeypatch):
-        self._setup(gvd, monkeypatch, [search_page(['a', 'b'])],
-                    lambda v: {'id': v, 'upload_date': '20240101000000', 'title': v})
+    def test_exits_when_the_channel_does_not_exist(self, gvd):
+        youtube = FakeYouTubeApi(channels=FakeChannels({'items': []}))
+        with pytest.raises(SystemExit):
+            gvd.get_uploads_playlist_id(youtube, 'nope')
 
-        result = gvd.get_new_videos_from_channel('chan', '20230101000000')
 
-        assert [v['id'] for v in result] == ['a', 'b']
+class TestListAllVideoIds:
+    def test_collects_ids_from_a_single_page(self, gvd):
+        youtube = FakeYouTubeApi(playlist_items=FakePlaylistItems([playlist_page(['a', 'b'])]))
+        assert gvd.list_all_video_ids(youtube, 'UUabc') == ['a', 'b']
 
-    def test_skips_videos_that_vanished_between_search_and_lookup(self, gvd, monkeypatch):
-        """Regression: this used to crash with a TypeError before the None guard."""
-        self._setup(
-            gvd, monkeypatch,
-            [search_page(['ok1', 'gone', 'ok2'])],
-            lambda v: None if v == 'gone' else {'id': v, 'upload_date': '20240101000000', 'title': v},
-        )
+    def test_follows_pagination_until_the_token_runs_out(self, gvd):
+        items = FakePlaylistItems([playlist_page(['a'], 'page2'), playlist_page(['b'])])
 
-        result = gvd.get_new_videos_from_channel('chan', '20230101000000')
+        assert gvd.list_all_video_ids(FakeYouTubeApi(playlist_items=items), 'UUabc') == ['a', 'b']
+        assert items.calls[0]['pageToken'] is None
+        assert items.calls[1]['pageToken'] == 'page2'
 
-        assert [v['id'] for v in result] == ['ok1', 'ok2']
+    def test_asks_for_the_given_playlist(self, gvd):
+        items = FakePlaylistItems([playlist_page([])])
+        gvd.list_all_video_ids(FakeYouTubeApi(playlist_items=items), 'UUxyz')
+        assert items.calls[0]['playlistId'] == 'UUxyz'
 
-    def test_follows_pagination_until_the_token_runs_out(self, gvd, monkeypatch):
-        fake = self._setup(
-            gvd, monkeypatch,
-            [search_page(['a'], next_page_token='page2'), search_page(['b'])],
-            lambda v: {'id': v, 'upload_date': '20240101000000', 'title': v},
-        )
+    def test_an_empty_playlist_yields_nothing(self, gvd):
+        youtube = FakeYouTubeApi(playlist_items=FakePlaylistItems([playlist_page([])]))
+        assert gvd.list_all_video_ids(youtube, 'UUabc') == []
 
-        result = gvd.get_new_videos_from_channel('chan', '20230101000000')
 
-        assert [v['id'] for v in result] == ['a', 'b']
-        assert fake.calls[0]['pageToken'] is None
-        assert fake.calls[1]['pageToken'] == 'page2'
+# --- checkpointing --------------------------------------------------------
 
-    def test_asks_for_videos_one_second_after_the_newest_known_one(self, gvd, monkeypatch):
-        """The +1s stops the newest existing video from being fetched again."""
-        fake = self._setup(gvd, monkeypatch, [search_page([])], lambda v: None)
+class TestCheckpoint:
+    @pytest.fixture(autouse=True)
+    def _in_tmp_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self.tmp_path = tmp_path
 
-        gvd.get_new_videos_from_channel('chan', '20240620234817')
+    def test_saves_and_reloads(self, gvd):
+        gvd.save_checkpoint([rec('a'), rec('b')])
+        assert [v['id'] for v in gvd.load_checkpoint()] == ['a', 'b']
 
-        assert fake.calls[0]['publishedAfter'] == '2024-06-20T23:48:18Z'
+    def test_absent_checkpoint_reads_as_empty(self, gvd):
+        assert gvd.load_checkpoint() == []
 
-    def test_passes_the_channel_id_and_restricts_to_videos(self, gvd, monkeypatch):
-        fake = self._setup(gvd, monkeypatch, [search_page([])], lambda v: None)
+    def test_clearing_removes_the_file(self, gvd):
+        gvd.save_checkpoint([rec('a')])
+        gvd.clear_checkpoint()
+        assert not (self.tmp_path / gvd.CHECKPOINT_PATH).exists()
 
-        gvd.get_new_videos_from_channel('my-channel', '20240101000000')
+    def test_clearing_is_safe_when_there_is_no_checkpoint(self, gvd):
+        gvd.clear_checkpoint()  # must not raise
 
-        assert fake.calls[0]['channelId'] == 'my-channel'
-        assert fake.calls[0]['type'] == 'video'
+    def test_does_not_leave_its_temporary_file_behind(self, gvd):
+        """The write goes via a temp file and os.replace so it is atomic."""
+        gvd.save_checkpoint([rec('a')])
+        assert not (self.tmp_path / (gvd.CHECKPOINT_PATH + '.tmp')).exists()
+
+
+# --- fetch_videos ---------------------------------------------------------
+
+class TestFetchVideos:
+    @pytest.fixture(autouse=True)
+    def _fast_and_isolated(self, gvd, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(gvd.time, 'sleep', lambda seconds: None)
+        self.tmp_path = tmp_path
+
+    def _details(self, gvd, monkeypatch, func):
+        monkeypatch.setattr(gvd, 'get_video_details', func)
+
+    def test_fetches_every_id(self, gvd, monkeypatch):
+        self._details(gvd, monkeypatch, lambda youtube, vid: rec(vid))
+
+        fetched, error = gvd.fetch_videos(None, ['a', 'b'], [])
+
+        assert [v['id'] for v in fetched] == ['a', 'b']
+        assert error is None
+
+    def test_skips_ids_with_no_details(self, gvd, monkeypatch):
+        self._details(gvd, monkeypatch,
+                      lambda youtube, vid: None if vid == 'gone' else rec(vid))
+
+        fetched, error = gvd.fetch_videos(None, ['ok1', 'gone', 'ok2'], [])
+
+        assert [v['id'] for v in fetched] == ['ok1', 'ok2']
+        assert error is None
+
+    def test_stops_at_a_blocking_error_and_hands_it_back(self, gvd, monkeypatch):
+        def details(youtube, vid):
+            if vid == 'boom':
+                raise IpBlocked(vid)
+            return rec(vid)
+
+        self._details(gvd, monkeypatch, details)
+
+        fetched, error = gvd.fetch_videos(None, ['a', 'boom', 'c'], [])
+
+        assert [v['id'] for v in fetched] == ['a']       # work before the block is kept
+        assert isinstance(error, IpBlocked)              # and reported, not raised
+
+    def test_a_block_checkpoints_what_was_fetched(self, gvd, monkeypatch):
+        """The crash that motivated this: a block used to discard the whole run."""
+        def details(youtube, vid):
+            if vid == 'boom':
+                raise IpBlocked(vid)
+            return rec(vid)
+
+        self._details(gvd, monkeypatch, details)
+
+        gvd.fetch_videos(None, ['a', 'boom'], [rec('earlier')])
+
+        saved = gvd.load_checkpoint()
+        assert [v['id'] for v in saved] == ['earlier', 'a']
+
+    def test_checkpoints_periodically_during_a_long_run(self, gvd, monkeypatch):
+        self._details(gvd, monkeypatch, lambda youtube, vid: rec(vid))
+        monkeypatch.setattr(gvd, 'CHECKPOINT_EVERY', 2)
+
+        gvd.fetch_videos(None, [f'v{i}' for i in range(4)], [])
+
+        assert len(gvd.load_checkpoint()) == 4
+
+    def test_pauses_between_videos_but_not_after_the_last(self, gvd, monkeypatch):
+        """The pause is what stops the IP block recurring."""
+        delays = []
+        monkeypatch.setattr(gvd.time, 'sleep', lambda seconds: delays.append(seconds))
+        self._details(gvd, monkeypatch, lambda youtube, vid: rec(vid))
+
+        gvd.fetch_videos(None, ['a', 'b', 'c'], [])
+
+        assert len(delays) == 2
+        assert all(d == gvd.REQUEST_DELAY_SECONDS for d in delays)
+
+    def test_per_video_errors_still_propagate_normally(self, gvd, monkeypatch):
+        """Only blocking errors are caught here; anything else is a real bug."""
+        def details(youtube, vid):
+            raise ValueError('unexpected')
+
+        self._details(gvd, monkeypatch, details)
+
+        with pytest.raises(ValueError):
+            gvd.fetch_videos(None, ['a'], [])
 
 
 # --- main -----------------------------------------------------------------
 
 class TestMain:
-    def _run(self, gvd, tmp_path, monkeypatch, existing, new):
+    def _setup(self, gvd, tmp_path, monkeypatch, existing, channel_ids,
+               fetch_result=None, checkpoint=None):
         (tmp_path / 'videos.json').write_text(json.dumps(existing), encoding='utf-8')
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(gvd, 'get_new_videos_from_channel', lambda channel, after: new)
+
+        if checkpoint is not None:
+            gvd.save_checkpoint(checkpoint)
+
+        monkeypatch.setattr(gvd, 'build', lambda *a, **k: object())
+        monkeypatch.setattr(gvd, 'load_api_key', lambda: 'test-key')
+        monkeypatch.setattr(gvd, 'get_uploads_playlist_id', lambda youtube, chan: 'UUabc')
+        monkeypatch.setattr(gvd, 'list_all_video_ids', lambda youtube, pl: channel_ids)
+
+        captured = {}
+
+        def fake_fetch(youtube, video_ids, already_fetched):
+            captured['requested'] = video_ids
+            if fetch_result is not None:
+                return fetch_result
+            return [rec(v, upload_date='20240101000000') for v in video_ids], None
+
+        monkeypatch.setattr(gvd, 'fetch_videos', fake_fetch)
+        return captured
+
+    def _run(self, gvd, tmp_path, monkeypatch, **kwargs):
+        captured = self._setup(gvd, tmp_path, monkeypatch, **kwargs)
         gvd.main()
         output = tmp_path / 'updated_videos.json'
-        return json.loads(output.read_text(encoding='utf-8')) if output.exists() else None
+        result = json.loads(output.read_text(encoding='utf-8')) if output.exists() else None
+        return result, captured
 
-    def test_writes_nothing_when_there_are_no_new_videos(self, gvd, tmp_path, monkeypatch):
-        result = self._run(gvd, tmp_path, monkeypatch, [rec('a', upload_date='20240101000000')], [])
+    def test_writes_nothing_when_the_archive_is_complete(self, gvd, tmp_path, monkeypatch):
+        result, captured = self._run(
+            gvd, tmp_path, monkeypatch,
+            existing=[rec('a', upload_date='20240101000000')],
+            channel_ids=['a'],
+        )
         assert result is None
 
-    def test_merges_new_videos_into_the_existing_set(self, gvd, tmp_path, monkeypatch):
-        result = self._run(
+    def test_fetches_only_the_ids_it_does_not_have(self, gvd, tmp_path, monkeypatch):
+        result, captured = self._run(
             gvd, tmp_path, monkeypatch,
-            [rec('old', upload_date='20220101000000')],
-            [rec('new', upload_date='20240101000000')],
+            existing=[rec('have', upload_date='20240101000000')],
+            channel_ids=['have', 'missing'],
         )
-        assert {v['id'] for v in result} == {'old', 'new'}
+        assert captured['requested'] == ['missing']
+        assert {v['id'] for v in result} == {'have', 'missing'}
+
+    def test_fetches_a_video_older_than_the_newest_one_stored(self, gvd, tmp_path, monkeypatch):
+        """Regression for the gap the old date cutoff created.
+
+        Resuming from max(upload_date) stranded any video an earlier run had
+        skipped, because it sat behind the cutoff forever. Diffing ids finds it.
+        """
+        result, captured = self._run(
+            gvd, tmp_path, monkeypatch,
+            existing=[rec('newest', upload_date='20240601000000')],
+            channel_ids=['newest', 'straggler'],
+        )
+        assert captured['requested'] == ['straggler']
+        assert 'straggler' in {v['id'] for v in result}
 
     def test_sorts_newest_first(self, gvd, tmp_path, monkeypatch):
-        result = self._run(
+        result, _ = self._run(
             gvd, tmp_path, monkeypatch,
-            [rec('mid', upload_date='20230101000000'), rec('oldest', upload_date='20220101000000')],
-            [rec('newest', upload_date='20240101000000')],
+            existing=[rec('mid', upload_date='20230101000000'),
+                      rec('oldest', upload_date='20220101000000')],
+            channel_ids=['mid', 'oldest', 'newest'],
+            fetch_result=([rec('newest', upload_date='20240101000000')], None),
         )
         assert [v['id'] for v in result] == ['newest', 'mid', 'oldest']
 
     def test_removes_duplicates_during_the_merge(self, gvd, tmp_path, monkeypatch):
-        result = self._run(
+        result, _ = self._run(
             gvd, tmp_path, monkeypatch,
-            [rec('dup', upload_date='20240101000000'), rec('dup', upload_date='20240101000000')],
-            [rec('fresh', upload_date='20240201000000')],
+            existing=[rec('dup', upload_date='20240101000000'),
+                      rec('dup', upload_date='20240101000000')],
+            channel_ids=['dup', 'fresh'],
         )
         assert len(result) == 2
 
     def test_pads_date_only_timestamps_from_the_seed_dataset(self, gvd, tmp_path, monkeypatch):
         """metadata.json used YYYYMMDD; the script widens it to 14 characters."""
-        result = self._run(
+        result, _ = self._run(
             gvd, tmp_path, monkeypatch,
-            [rec('seeded', upload_date='20220720')],
-            [rec('fresh', upload_date='20240101000000')],
+            existing=[rec('seeded', upload_date='20220720')],
+            channel_ids=['seeded', 'fresh'],
         )
         seeded = next(v for v in result if v['id'] == 'seeded')
         assert seeded['upload_date'] == '20220720000000'
 
-    def test_asks_for_videos_newer_than_the_latest_stored_one(self, gvd, tmp_path, monkeypatch):
-        seen = {}
-        (tmp_path / 'videos.json').write_text(json.dumps([
-            rec('a', upload_date='20220101000000'),
-            rec('b', upload_date='20240620234817'),
-        ]), encoding='utf-8')
-        monkeypatch.chdir(tmp_path)
+    def test_resumes_from_a_checkpoint_without_refetching(self, gvd, tmp_path, monkeypatch):
+        result, captured = self._run(
+            gvd, tmp_path, monkeypatch,
+            existing=[rec('have', upload_date='20240101000000')],
+            channel_ids=['have', 'done', 'todo'],
+            checkpoint=[rec('done', upload_date='20240201000000')],
+        )
+        assert captured['requested'] == ['todo']
+        assert {v['id'] for v in result} == {'have', 'done', 'todo'}
 
-        def capture(channel, after):
-            seen['after'] = after
-            return []
+    def test_clears_the_checkpoint_after_a_successful_run(self, gvd, tmp_path, monkeypatch):
+        self._run(
+            gvd, tmp_path, monkeypatch,
+            existing=[rec('have', upload_date='20240101000000')],
+            channel_ids=['have', 'todo'],
+            checkpoint=[rec('done', upload_date='20240201000000')],
+        )
+        assert not (tmp_path / gvd.CHECKPOINT_PATH).exists()
 
-        monkeypatch.setattr(gvd, 'get_new_videos_from_channel', capture)
-        gvd.main()
+    def test_a_block_saves_progress_and_writes_no_output(self, gvd, tmp_path, monkeypatch):
+        self._setup(
+            gvd, tmp_path, monkeypatch,
+            existing=[rec('have', upload_date='20240101000000')],
+            channel_ids=['have', 'a', 'b'],
+            fetch_result=([rec('a', upload_date='20240201000000')], IpBlocked('b')),
+        )
 
-        assert seen['after'] == '20240620234817'
+        with pytest.raises(SystemExit) as excinfo:
+            gvd.main()
+
+        message = str(excinfo.value)
+        assert gvd.CHECKPOINT_PATH in message
+        assert 'run this script again' in message
+
+        # the partial work survives, and videos.json is not half-updated
+        assert [v['id'] for v in gvd.load_checkpoint()] == ['a']
+        assert not (tmp_path / 'updated_videos.json').exists()
+
+
