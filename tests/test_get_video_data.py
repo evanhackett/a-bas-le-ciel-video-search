@@ -245,6 +245,25 @@ class TestCheckBlockStatus:
         assert gvd.check_block_status() is True
 
 
+# --- next_delay -----------------------------------------------------------
+
+class TestNextDelay:
+    def test_never_shorter_than_the_delay_and_never_longer_than_delay_plus_jitter(self, gvd):
+        low, high = gvd.REQUEST_JITTER_SECONDS
+        for _ in range(200):
+            assert gvd.REQUEST_DELAY_SECONDS + low <= gvd.next_delay() <= gvd.REQUEST_DELAY_SECONDS + high
+
+    def test_varies_between_calls(self, gvd):
+        assert len({gvd.next_delay() for _ in range(50)}) > 1
+
+    def test_follows_the_delay_setting(self, gvd, monkeypatch):
+        """--delay rebinds the constant, so next_delay has to read it live."""
+        monkeypatch.setattr(gvd, 'REQUEST_DELAY_SECONDS', 0.0)
+        monkeypatch.setattr(gvd, 'REQUEST_JITTER_SECONDS', (0.0, 0.0))
+
+        assert gvd.next_delay() == 0.0
+
+
 # --- command line ---------------------------------------------------------
 
 class TestParseArgs:
@@ -511,7 +530,19 @@ class TestFetchVideos:
         gvd.fetch_videos(None, ['a', 'b', 'c'], [])
 
         assert len(delays) == 2
-        assert all(d == gvd.REQUEST_DELAY_SECONDS for d in delays)
+        low, high = gvd.REQUEST_JITTER_SECONDS
+        assert all(gvd.REQUEST_DELAY_SECONDS + low <= d <= gvd.REQUEST_DELAY_SECONDS + high
+                   for d in delays)
+
+    def test_the_pause_is_not_the_same_length_every_time(self, gvd, monkeypatch):
+        """A metronome-regular request is the pattern the jitter exists to break."""
+        delays = []
+        monkeypatch.setattr(gvd.time, 'sleep', lambda seconds: delays.append(seconds))
+        self._details(gvd, monkeypatch, lambda youtube, vid: rec(vid))
+
+        gvd.fetch_videos(None, [f'v{i}' for i in range(20)], [])
+
+        assert len(set(delays)) > 1
 
     def test_per_video_errors_still_propagate_normally(self, gvd, monkeypatch):
         """Only blocking errors are caught here; anything else is a real bug."""

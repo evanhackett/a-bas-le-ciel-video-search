@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import time
 import argparse
 from googleapiclient.discovery import build
@@ -47,17 +48,31 @@ BLOCKING_ERRORS = (RequestBlocked, PoTokenRequired)
 # Partially completed runs are saved here so a block does not discard the work
 CHECKPOINT_PATH = 'fetch-progress.json'
 
-# How often to write the checkpoint, in videos
-CHECKPOINT_EVERY = 10
+# How often to write the checkpoint, in videos. Every one: at a minute per video a
+# batched write would risk throwing away ten minutes of work on a ctrl-c, and the
+# file is a few KB per record, so writing it costs nothing next to the delay.
+CHECKPOINT_EVERY = 1
 
 # Pause between videos. YouTube blocks the IP if transcripts are requested too
 # quickly, and a block costs far more time than the delay does.
 #
 # This number is a guess. YouTube publishes no rate limit for the transcript
 # endpoint, because it is not a public API — youtube-transcript-api reads an
-# internal one. Nothing validates this value; it is simply slower than the
-# unthrottled rate that did get blocked. Raise it with --delay if blocks recur.
-REQUEST_DELAY_SECONDS = 3.0
+# internal one. Nothing validates this value; it is simply slower than rates that
+# did get blocked: unthrottled first, then a flat 3 seconds. Raise it with --delay
+# if blocks recur.
+REQUEST_DELAY_SECONDS = 60.0
+
+# Added on top of the delay, a fresh random amount before each video. A perfectly
+# regular request every N seconds is a machine-shaped pattern, and rate limiters
+# look for those; jitter smears it out. Also a guess — nothing here confirms that
+# YouTube's limiter cares about regularity, only that it is cheap if it does.
+REQUEST_JITTER_SECONDS = (1.0, 10.0)
+
+
+def next_delay():
+    """How long to wait before the next video: the delay plus a random top-up."""
+    return REQUEST_DELAY_SECONDS + random.uniform(*REQUEST_JITTER_SECONDS)
 
 # Used only by --check, to see whether requests are getting through at all
 PROBE_VIDEO_ID = 'hoxM7jBBlaU'
@@ -256,7 +271,10 @@ def fetch_videos(youtube, video_ids, already_fetched):
             save_checkpoint(already_fetched + fetched)
 
         if index < total:
-            time.sleep(REQUEST_DELAY_SECONDS)
+            delay = next_delay()
+            # Said out loud because a minute of silence otherwise looks like a hang
+            print(f'  waiting {delay:.1f}s...')
+            time.sleep(delay)
 
     return fetched, None
 
@@ -317,6 +335,13 @@ def main():
     if not missing_ids and not checkpoint:
         print('nothing to do.')
         return
+
+    if missing_ids:
+        # Time spent sleeping only; the requests themselves add to this
+        average_delay = REQUEST_DELAY_SECONDS + sum(REQUEST_JITTER_SECONDS) / 2
+        hours = (len(missing_ids) - 1) * average_delay / 3600
+        print(f'at ~{average_delay:.0f}s between videos that is roughly {hours:.1f}h '
+              f'of waiting. Progress is saved as it goes; ctrl-c is safe.')
 
     newly_fetched, blocking_error = fetch_videos(youtube, missing_ids, checkpoint)
     all_new = checkpoint + newly_fetched

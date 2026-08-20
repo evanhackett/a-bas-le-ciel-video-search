@@ -135,8 +135,8 @@ costs 1 quota unit per 50 videos where `search.list` costs 100.
 ### Interrupted runs resume
 
 YouTube rate-limits transcript requests and will block your IP if you ask too
-quickly, so the script sleeps `REQUEST_DELAY_SECONDS` between videos and saves its
-progress to `fetch-progress.json` every `CHECKPOINT_EVERY` videos.
+quickly, so the script sleeps between videos (see [about the delay](#about-the-delay))
+and saves its progress to `fetch-progress.json` after every video.
 
 If a block happens, the script saves what it has, tells you, and stops without
 writing `updated_videos.json`. Wait for the block to clear — it can take hours —
@@ -167,17 +167,26 @@ already in trouble. Every half hour is plenty.
 ### About the delay
 
 ```bash
-python get-video-data.py --delay 5   # seconds between videos
+python get-video-data.py --delay 90   # seconds between videos
 ```
 
-`REQUEST_DELAY_SECONDS` defaults to 3 seconds. **That number is a guess.** YouTube
-publishes no rate limit for the transcript endpoint, because it is not a public
-API — `youtube-transcript-api` reads an internal one, and getting blocked is that
-endpoint behaving as intended rather than a bug. Nothing validates the default; it
-is only known to be slower than the unthrottled rate that did get blocked.
+Each pause is `REQUEST_DELAY_SECONDS` (default 60) plus a random 1–10 seconds
+drawn fresh each time, so requests do not arrive on an exact metronome. Roughly a
+minute per video, so a few hundred videos is an overnight run; the script prints
+an estimate before it starts.
 
-If blocks keep happening, raise it. The checkpointing, not the delay, is what
-actually protects a long run.
+**Both numbers are guesses.** YouTube publishes no rate limit for the transcript
+endpoint, because it is not a public API — `youtube-transcript-api` reads an
+internal one, and getting blocked is that endpoint behaving as intended rather
+than a bug. Nothing here validates either value:
+
+- **60 seconds** is only known to be slower than two rates that did get blocked —
+  unthrottled, and a flat 3 seconds. It is not known to be slow *enough*.
+- **The jitter** assumes the limiter notices perfectly regular traffic. That is a
+  common way to build one, but unverified here. It is cheap insurance either way.
+
+If blocks keep happening, raise `--delay` further. The checkpointing, not the
+delay, is what actually protects a long run.
 
 ### The manual step that is easy to forget
 
