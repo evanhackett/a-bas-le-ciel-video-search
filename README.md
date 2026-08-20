@@ -146,6 +146,39 @@ re-fetched and nothing is lost. The checkpoint is deleted once a run completes.
 A block is not treated as "this video has no captions"; see
 [why transcript errors are not all caught](#why-transcript-errors-are-not-all-caught).
 
+### Checking whether you are still blocked
+
+```bash
+python get-video-data.py --check     # one request; exits 0 if clear, 1 if blocked
+```
+
+There is no API for block status, and YouTube does not publish how long a block
+lasts, so a single request is the only way to find out. Use this rather than
+starting a real run to test the water. Because it sets an exit code you can poll
+with it:
+
+```bash
+until python get-video-data.py --check; do sleep 1800; done && python get-video-data.py
+```
+
+Don't poll aggressively — every probe is another request from an IP that is
+already in trouble. Every half hour is plenty.
+
+### About the delay
+
+```bash
+python get-video-data.py --delay 5   # seconds between videos
+```
+
+`REQUEST_DELAY_SECONDS` defaults to 3 seconds. **That number is a guess.** YouTube
+publishes no rate limit for the transcript endpoint, because it is not a public
+API — `youtube-transcript-api` reads an internal one, and getting blocked is that
+endpoint behaving as intended rather than a bug. Nothing validates the default; it
+is only known to be slower than the unthrottled rate that did get blocked.
+
+If blocks keep happening, raise it. The checkpointing, not the delay, is what
+actually protects a long run.
+
 ### The manual step that is easy to forget
 
 **The script writes `updated_videos.json`, not `videos.json`.** You have to promote
