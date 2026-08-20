@@ -102,9 +102,8 @@ Neither suite talks to the YouTube API or needs a key.
 
 ## Updating the data
 
-`get-video-data.py` fetches videos published since the newest one already in
-`videos.json`, pulls their transcripts, merges everything, and sorts
-reverse-chronologically.
+`get-video-data.py` works out which videos are missing, fetches them with their
+transcripts, merges everything, and sorts reverse-chronologically.
 
 ```bash
 cd my-site
@@ -114,8 +113,38 @@ python get-video-data.py
 
 First run on a fresh clone? Set up the API key first — see [API key](#api-key) below.
 
-It prints the cutoff date it derived and then a line per video it fetches. If the
-channel has nothing new it says so and exits without writing anything.
+It prints how many videos the channel has, how many are already held and how many
+it will fetch, then a line per video. If nothing is missing it says so and exits
+without writing anything.
+
+### How it decides what to fetch
+
+It lists every video id on the channel and subtracts the ids already in
+`videos.json`. It does **not** resume from the newest stored date.
+
+That matters. The date-cutoff version asked `search.list` for videos published
+after `max(upload_date)`, and `search.list` is a relevance-ranked index that is not
+guaranteed to return everything. Anything it missed fell behind the cutoff on the
+next run and was never retried — 18 videos had been silently stranded that way.
+Diffing ids has no such blind spot: a video missed today is simply picked up
+tomorrow.
+
+The id list comes from the channel's uploads playlist, which is authoritative and
+costs 1 quota unit per 50 videos where `search.list` costs 100.
+
+### Interrupted runs resume
+
+YouTube rate-limits transcript requests and will block your IP if you ask too
+quickly, so the script sleeps `REQUEST_DELAY_SECONDS` between videos and saves its
+progress to `fetch-progress.json` every `CHECKPOINT_EVERY` videos.
+
+If a block happens, the script saves what it has, tells you, and stops without
+writing `updated_videos.json`. Wait for the block to clear — it can take hours —
+then run the script again and it carries on from where it stopped. Nothing is
+re-fetched and nothing is lost. The checkpoint is deleted once a run completes.
+
+A block is not treated as "this video has no captions"; see
+[why transcript errors are not all caught](#why-transcript-errors-are-not-all-caught).
 
 ### The manual step that is easy to forget
 
@@ -192,16 +221,19 @@ cp config.example.json config.json
 
 Get a key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
 create a project, enable **YouTube Data API v3**, then create an API key. Restrict
-it to that one API — this script only ever calls `search.list` and `videos.list`,
-so a restricted key limits the damage if it does leak. Don't add an HTTP-referrer
-restriction; that's for browser keys and will break a command-line script.
+it to that one API — this script only calls `channels.list`, `playlistItems.list`
+and `videos.list`, so a restricted key limits the damage if it does leak. Don't add
+an HTTP-referrer restriction; that's for browser keys and will break a
+command-line script.
 
 If no key is found the script exits with a message telling you which of the two to
 set, rather than failing somewhere deep in an API call.
 
-Quota: `search.list` costs 100 units per page against a 10,000/day default budget;
-the per-video `videos.list` and transcript calls are cheap but slow. A long backlog
-is more likely to be rate-limited on transcripts than on quota.
+Quota, against a 10,000 units/day default budget: enumerating the whole channel
+costs about 1 unit per 50 videos (~62 for 3,000 videos), plus 1 unit per video
+fetched. Quota is not the constraint — **YouTube's transcript rate limiting is**,
+and that has no quota cost at all. A long backlog will be slow, and a block is
+likelier than running out of units.
 
 ## Files that aren't part of the site
 
@@ -221,6 +253,9 @@ You will see these locally but not in a fresh clone.
   upstream repo. Completely unused; playlists were never surfaced in the UI.
 - **`updated_videos.json`** — leftover output from the last script run. Safe to
   delete once promoted.
+- **`fetch-progress.json`** — checkpoint from an interrupted fetch. Leave it alone
+  and rerun the script to resume; it is deleted automatically on success. Deleting
+  it by hand only means re-fetching those videos.
 - **`sample.json`** — a hand-truncated subset, presumably for testing against
   something smaller than 52 MB. **It is invalid JSON** (trailing comma near line 622)
   and nothing references it.
