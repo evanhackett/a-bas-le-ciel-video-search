@@ -229,6 +229,37 @@ class TestFetchTranscript:
         assert gvd.get_transcript_api() is gvd.get_transcript_api()
 
 
+class TestCheckBlockStatus:
+    def test_reports_clear_when_a_request_succeeds(self, gvd, monkeypatch):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(['words']))
+        assert gvd.check_block_status() is True
+
+    @pytest.mark.parametrize('error', BLOCKING_FAILURES)
+    def test_reports_blocked_on_a_blocking_error(self, gvd, monkeypatch, error):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
+        assert gvd.check_block_status() is False
+
+    def test_a_probe_video_without_captions_still_counts_as_clear(self, gvd, monkeypatch):
+        """The request got through; the video simply has no transcript."""
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=TranscriptsDisabled('vid')))
+        assert gvd.check_block_status() is True
+
+
+# --- command line ---------------------------------------------------------
+
+class TestParseArgs:
+    def test_defaults_to_a_normal_run(self, gvd):
+        args = gvd.parse_args([])
+        assert args.check is False
+        assert args.delay == gvd.REQUEST_DELAY_SECONDS
+
+    def test_check_flag(self, gvd):
+        assert gvd.parse_args(['--check']).check is True
+
+    def test_delay_overrides_the_default(self, gvd):
+        assert gvd.parse_args(['--delay', '7.5']).delay == 7.5
+
+
 # --- get_video_details ----------------------------------------------------
 
 class TestGetVideoDetails:

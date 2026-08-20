@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import argparse
 from googleapiclient.discovery import build
 from datetime import datetime
 from youtube_transcript_api import (
@@ -51,7 +52,15 @@ CHECKPOINT_EVERY = 10
 
 # Pause between videos. YouTube blocks the IP if transcripts are requested too
 # quickly, and a block costs far more time than the delay does.
-REQUEST_DELAY_SECONDS = 1.0
+#
+# This number is a guess. YouTube publishes no rate limit for the transcript
+# endpoint, because it is not a public API — youtube-transcript-api reads an
+# internal one. Nothing validates this value; it is simply slower than the
+# unthrottled rate that did get blocked. Raise it with --delay if blocks recur.
+REQUEST_DELAY_SECONDS = 3.0
+
+# Used only by --check, to see whether requests are getting through at all
+PROBE_VIDEO_ID = 'hoxM7jBBlaU'
 
 
 def load_api_key():
@@ -100,6 +109,27 @@ def fetch_transcript(video_id):
         return NO_TRANSCRIPT
 
     return ' '.join(snippet.text for snippet in fetched)
+
+
+def check_block_status():
+    """Make a single transcript request to see whether this IP is blocked.
+
+    There is no API for block status, and YouTube does not say how long a block
+    lasts, so asking once and seeing what comes back is the only way to know.
+    Returns True if requests are getting through.
+    """
+    try:
+        get_transcript_api().fetch(PROBE_VIDEO_ID)
+    except BLOCKING_ERRORS as error:
+        print(f'BLOCKED ({type(error).__name__}). Wait longer before running again.')
+        return False
+    except NO_TRANSCRIPT_ERRORS as error:
+        # The probe video lost its captions, but the request itself got through
+        print(f'Not blocked. (Probe video has no transcript: {type(error).__name__}.)')
+        return True
+
+    print('Not blocked. Transcript requests are getting through.')
+    return True
 
 
 # Function to get video details
@@ -321,5 +351,30 @@ def main():
     print('promote it with:  mv updated_videos.json videos.json')
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Fetch missing videos and transcripts into updated_videos.json.',
+    )
+    parser.add_argument(
+        '--check',
+        action='store_true',
+        help='make one request to see whether YouTube is blocking this IP, then exit',
+    )
+    parser.add_argument(
+        '--delay',
+        type=float,
+        default=REQUEST_DELAY_SECONDS,
+        metavar='SECONDS',
+        help='pause between videos (default: %(default)s)',
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    if args.check:
+        raise SystemExit(0 if check_block_status() else 1)
+
+    REQUEST_DELAY_SECONDS = args.delay
     main()
