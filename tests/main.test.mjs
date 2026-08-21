@@ -265,12 +265,30 @@ describe('pagination', () => {
         assert.equal(app.pageInfo(), 'Page 1 of 2');
     });
 
-    // Current behaviour with no results is "Page 1 of 0", and next/last stay
-    // enabled because currentPage (1) never equals totalPages (0).
-    test('disables next/last when there are no results', { todo: true }, () => {
+    // Regression: with no results totalPages was 0, so currentPage (1) never
+    // equalled it and next/last stayed live on an empty list.
+    test('disables next/last when there are no results', () => {
         app.search('zebra');
         assert.ok(app.$('.next-button').disabled);
         assert.ok(app.$('.last-button').disabled);
+    });
+
+    test('disables prev/first when there are no results too', () => {
+        app.search('zebra');
+        assert.ok(app.$('.prev-button').disabled);
+        assert.ok(app.$('.first-button').disabled);
+    });
+
+    test('reads "Page 1 of 1" rather than "Page 1 of 0" when empty', () => {
+        app.search('zebra');
+        assert.equal(app.pageInfo(), 'Page 1 of 1');
+    });
+
+    test('lastPage stays on page 1 when there are no results', () => {
+        // totalPages of 0 used to send currentPage to 0
+        app.search('zebra');
+        app.app.lastPage();
+        assert.equal(app.pageInfo(), 'Page 1 of 1');
     });
 });
 

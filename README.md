@@ -87,11 +87,12 @@ venv/bin/pip install -r requirements-dev.txt   # Python test deps (pytest)
 test touches the network. Because `main.js` holds module-level state, each test
 re-imports it under a cache-busting query string for isolation.
 
-Some tests are marked `todo`: they describe behaviour that is known to be wrong
-and are reported without failing the run. They flip to passing when the bug is
-fixed. Currently these cover the regex-injection bug in `highlightText()`, the
-progress bar exceeding 100% on GitHub Pages, and the pagination buttons staying
-enabled when a search returns nothing.
+Tests can be marked `todo`: they describe behaviour that is known to be wrong and
+are reported without failing the run, then flip to passing when the bug is fixed.
+There are none at the moment — the three that existed (the regex-injection bug in
+`highlightText()`, the progress bar exceeding 100% on GitHub Pages, and the
+pagination buttons staying enabled on an empty result set) were fixed and their
+tests promoted. It is a good pattern for a bug you are not fixing today.
 
 `test_data_integrity.py` runs against the real 53 MB dataset, so it catches
 problems the unit tests cannot — malformed dates, mismatched URLs, duplicate ids.
@@ -436,23 +437,19 @@ You will see these locally but not in a fresh clone.
 
 ## Known issues
 
-- **The load progress bar is broken on the live site but fine locally.** GitHub Pages
-  serves `videos.json` gzipped with `Content-Length: ~17.9 MB` (compressed), but
-  XHR's `event.loaded` counts *decompressed* bytes, up to ~53 MB. So `loaded / total`
-  reaches ~291% and the bar snaps to full almost immediately. Locally there's no
-  gzip, so the two numbers agree. Fix by dividing against the known uncompressed
-  size instead of `event.total`, or switch to an indeterminate spinner.
+- **The load progress bar fills too early on the live site** (partly fixed). GitHub
+  Pages serves `videos.json` gzipped with `Content-Length: ~17.9 MB` (compressed),
+  while XHR's `event.loaded` counts *decompressed* bytes, up to ~53 MB. The ratio is
+  therefore wrong by about 3x. It is now capped at 100%, so the bar no longer
+  overflows its container — but it still reaches full about a third of the way
+  through the download and sits there. Locally there is no gzip, so the two numbers
+  agree and the bar is accurate. A real fix means an indeterminate bar once
+  `loaded > total` proves the response is compressed; dividing by a hardcoded
+  uncompressed size would need editing every time the dataset grows.
 - **Pagination overflows on narrow screens.** The `@media (max-width: 740px)` block
   only restyles the result cards. `.pagination` stays `display: flex` with no
   `flex-wrap`, so five buttons plus the page counter plus the results-per-page
   `<select>` run off the edge of a phone.
-- **`highlightText()` builds a `RegExp` directly from user input** (`search.js`), so
-  searching for `(`, `[`, or `*` throws. Escaping the token fixes it. Covered by a
-  `todo` test.
-- **Pagination controls stay enabled when a search returns nothing.** With 0 results
-  `totalPages` is 0 while `currentPage` is 1, so the `currentPage === totalPages`
-  checks never disable next/last, and the counter reads "Page 1 of 0". Covered by a
-  `todo` test.
 - **Results are injected via `innerHTML` without escaping.** The data comes from the
   YouTube API rather than from users, so this is low risk in practice, but a video
   description containing markup will render as markup.

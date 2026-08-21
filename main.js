@@ -156,8 +156,17 @@ export function displayResults() {
     resultCount.textContent = `Found ${searchResults.length} result(s)`;
 }
 
+/**
+ * How many pages the current results span. Never less than 1: an empty result
+ * set used to give 0, which left next/last enabled (currentPage 1 never equalled
+ * totalPages 0) and made lastPage() jump to page 0.
+ */
+function totalPageCount() {
+    return Math.max(1, Math.ceil(searchResults.length / resultsPerPage));
+}
+
 export function updatePagination() {
-    const totalPages = Math.ceil(searchResults.length / resultsPerPage);
+    const totalPages = totalPageCount();
     const paginationTop = document.getElementById('pagination-top');
     const paginationBot = document.getElementById('pagination-bottom');
     paginationTop.style.display = 'block';
@@ -188,7 +197,7 @@ export function prevPage() {
 }
 
 export function nextPage() {
-    const totalPages = Math.ceil(searchResults.length / resultsPerPage);
+    const totalPages = totalPageCount();
     if (currentPage < totalPages) {
         currentPage++;
         displayResults();
@@ -197,7 +206,7 @@ export function nextPage() {
 }
 
 export function lastPage() {
-    const totalPages = Math.ceil(searchResults.length / resultsPerPage);
+    const totalPages = totalPageCount();
     if (currentPage !== totalPages) {
         currentPage = totalPages;
         displayResults();
