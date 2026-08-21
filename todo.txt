@@ -10,3 +10,33 @@ Fix "results per page" dropdown and pagination controls layout on mobile and sma
 
 add an "contains all words" which captures a different search result than "any" or "exact".
 
+performance optimizations for search in webapp.
+
+Progress bar for long searches.
+
+LLM-based search. Would be cool to describe to the LLM the kind of thing you are looking for and have it recommend things.
+
+
+
+Tomorrow:
+
+Check if you are unblocked:
+python get-video-data.py --check
+
+if you are good, try running the script again to see if you can fetch all the videos without getting blocked this time (with the newly added  throttling we might be able to get everything without getting blocked).
+
+If you are still blocked, wait 48 hours then try again.
+
+
+UPDATE: tried with a 5 second delay, got blocked 19 videos in. Perhaps try a much longer delay next time, like 70 seconds or something.
+Also maybe wait a full 24 hours or more since your IP is probably in some kind of heigtened sensitivity state. The fact that I got blocked after only 19 videos is telling, because yesterday, without any throttling, I downloaded more videos than that without getting blocked.
+
+UPDATE 2: there is now a --proxy flag that routes transcript requests through Webshare
+residential proxies, which is the fix youtube-transcript-api itself recommends for this.
+Buy the *Residential* package (not "Proxy Server" or "Static Residential"), put the proxy
+username/password in config.json, then:
+
+python get-video-data.py --proxy --check     # confirms the credentials work
+python get-video-data.py --proxy             # ~1s per video instead of ~60s
+
+No need to wait out the block on this IP if you go that route.
