@@ -1,3 +1,7 @@
 {
-  "youtube_api_key": "PASTE_YOUR_YOUTUBE_DATA_API_V3_KEY_HERE"
+  "youtube_api_key": "PASTE_YOUR_YOUTUBE_DATA_API_V3_KEY_HERE",
+
+  "_comment": "Only needed for --proxy: the Proxy Username and Proxy Password from https://dashboard.webshare.io/proxy/settings, not your Webshare account login.",
+  "webshare_proxy_username": "PASTE_YOUR_WEBSHARE_PROXY_USERNAME_HERE",
+  "webshare_proxy_password": "PASTE_YOUR_WEBSHARE_PROXY_PASSWORD_HERE"
 }

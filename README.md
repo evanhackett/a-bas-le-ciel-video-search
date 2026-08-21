@@ -164,6 +164,9 @@ until python get-video-data.py --check; do sleep 1800; done && python get-video-
 Don't poll aggressively — every probe is another request from an IP that is
 already in trouble. Every half hour is plenty.
 
+With `--proxy` this stops being a waiting game at all; see
+[fetching through residential proxies](#fetching-through-residential-proxies).
+
 ### About the delay
 
 ```bash
@@ -185,8 +188,109 @@ than a bug. Nothing here validates either value:
 - **The jitter** assumes the limiter notices perfectly regular traffic. That is a
   common way to build one, but unverified here. It is cheap insurance either way.
 
-If blocks keep happening, raise `--delay` further. The checkpointing, not the
-delay, is what actually protects a long run.
+If blocks keep happening, raise `--delay` further — or stop fighting the rate
+limit from one IP and use [`--proxy`](#fetching-through-residential-proxies). The
+checkpointing, not the delay, is what actually protects a long run.
+
+### Fetching through residential proxies
+
+```bash
+python get-video-data.py --proxy
+```
+
+Sends transcript requests through Webshare's rotating residential proxies instead
+of this machine's IP. This is what `youtube-transcript-api` itself recommends for
+exactly this problem, and it addresses the cause rather than the symptom: the
+delay exists because every request comes from one IP and that is what YouTube
+counts. Behind a rotating pool no single IP makes enough requests to look like a
+scraper, and a blocked IP is not *your* IP — the library retries, the pool rotates,
+and the run carries on.
+
+It changes the pacing accordingly. `--proxy` drops the default pause from 60
+seconds to 1 (plus 0–1s of jitter), which turns a several-hundred-video backlog
+from an overnight run into a few minutes. `--delay` still overrides it in either
+mode:
+
+```bash
+python get-video-data.py --proxy --delay 5
+```
+
+Caveats worth knowing before you buy anything:
+
+- **The package matters.** You need Webshare's **Residential** package. "Proxy
+  Server" and "Static Residential" give fixed exit IPs, which get blocked exactly
+  like a home IP does, only with a bill attached.
+- **1 second is still a guess**, like the 60. It is not a measured safe rate,
+  merely not flat out. Webshare bills bandwidth rather than requests, so speed
+  costs nothing there, but the IP pool is shared and hammering it is how its IPs
+  get blocked for everyone.
+- **Blocks are still possible**, and they look different through a proxy — see
+  [when a proxied run gets blocked](#when-a-proxied-run-gets-blocked). Everything
+  that protected a direct run still applies: the checkpoint, the resume, the
+  refusal to record a block as "no captions".
+- **Only transcripts go through the proxy.** The YouTube Data API calls (the
+  channel listing and per-video metadata) are authenticated with your key and go
+  out directly. They were never the thing getting blocked.
+
+Credentials are set up alongside the API key — see [API key](#api-key).
+
+#### When a proxied run gets blocked
+
+A proxied block does **not** arrive as `RequestBlocked`. It arrives as
+`requests.RetryError`, with `host='www.google.com'` and `too many 429 error
+responses` — which is why `TRANSPORT_ERRORS` (the whole `requests.RequestException`
+tree) ends a run the same way a blocking error does: save the checkpoint, explain,
+stop. It is emphatically *not* caught as "this video has no captions", for the
+reason in
+[why transcript errors are not all caught](#why-transcript-errors-are-not-all-caught).
+
+**Neither waiting nor slowing down helps**, and both were tried. Three runs:
+1.3s pacing reached 145 videos, an immediate rerun died on video 1, and `--delay 10`
+managed 43. More delay, fewer videos.
+
+The pace was never what decided it. Every request through the rotating endpoint
+draws a fresh exit IP, and a minority of those are already refused by YouTube —
+sampling 24 draws found 2 blocked, so on the order of 8%. What made one bad draw
+fatal was `retries_when_blocked`, which does not do what its name promises. A
+refused draw gets a 302 to `google.com/sorry`; `requests` follows the redirect; and
+urllib3's `Retry` then fires **against the block page**, requesting `/sorry` ten
+times — a URL that returns 429 for everyone, on any IP. The retry budget was spent
+without ever redrawing an IP, so a single unlucky draw ended the run.
+
+So the library's retry is disabled (`retries_when_blocked=0`) and
+`fetch_with_retries()` does the work instead: on a refusal it drops the client —
+Webshare binds an exit IP to a connection, so a new client is a new draw — and asks
+again, up to `PROXY_ATTEMPTS_PER_VIDEO` (8) times. At an 8% refusal rate that puts
+a stall at `0.08**8`, roughly one in seven hundred million videos.
+
+You will see the redraws in the output, and they are not a problem:
+
+```
+  blocked draw (RetryError); redrawing an IP [2/8]
+```
+
+If a run *does* stall now, the pool is having a genuinely bad day. Rerun later or
+raise `PROXY_ATTEMPTS_PER_VIDEO` — do not reach for `--delay`.
+
+#### Why there is a timeout
+
+`youtube-transcript-api` passes no timeout on any request — the word does not appear
+anywhere in the package — and `requests` defaults to `None`, which means wait
+forever. A single proxy connection going quiet is therefore enough to hang a run
+indefinitely, which is exactly what happened with one video left to fetch: the
+checkpoint was already safe, but there was nothing to do except ctrl-c.
+
+`TimeoutSession` puts a `REQUEST_TIMEOUT_SECONDS` (30) default on every request and
+is handed to the client as `http_client`. The library mutates that session — proxies,
+headers, adapters — but never replaces it, so the override survives. A timeout is a
+`RequestException`, so a hung draw becomes just another bad draw and gets redrawn.
+
+`--check` honours the flag too, which is the quickest way to confirm the
+credentials work:
+
+```bash
+python get-video-data.py --proxy --check
+```
 
 ### The manual step that is easy to forget
 
@@ -232,12 +336,18 @@ stop working, so if transcripts start failing, upgrading is the first thing to t
 (`TranscriptsDisabled`, `NoTranscriptFound`, `AgeRestricted`, `VideoUnavailable`,
 `VideoUnplayable`) and records the placeholder for them.
 
-Blocking errors — `RequestBlocked`, `IpBlocked`, `PoTokenRequired` — are
-deliberately left to crash the run. They affect *every* video, so treating one as
+Blocking errors — `RequestBlocked`, `IpBlocked`, `PoTokenRequired` — and transport
+failures — anything under `requests.RequestException`, which is how a proxied 429
+wave arrives — are deliberately left to end the run. They affect *every* video, so treating one as
 "no captions" would write placeholder text over real transcripts for the entire
-batch and silently degrade `videos.json`. A lost run is cheap; a corrupted dataset
+batch and silently degrade `videos.json`. A request that never completed says
+nothing about a video's captions either. A lost run is cheap; a corrupted dataset
 is not. For the same reason, do not simplify that tuple to the
 `CouldNotRetrieveTranscript` base class, which would catch the blocking errors too.
+
+`fetch_videos()` catches the run-ending ones one level up, so they checkpoint and
+exit with instructions instead of a traceback — that is the difference between a
+rerun and a puzzle.
 
 ### API key
 
@@ -270,6 +380,27 @@ command-line script.
 
 If no key is found the script exits with a message telling you which of the two to
 set, rather than failing somewhere deep in an API call.
+
+### Webshare proxy credentials
+
+Only needed for [`--proxy`](#fetching-through-residential-proxies). Same two
+sources as the API key, in the same order:
+
+1. the `WEBSHARE_PROXY_USERNAME` and `WEBSHARE_PROXY_PASSWORD` environment variables
+2. `config.json` sitting next to the script
+
+```json
+{
+  "webshare_proxy_username": "PASTE_YOUR_WEBSHARE_PROXY_USERNAME_HERE",
+  "webshare_proxy_password": "PASTE_YOUR_WEBSHARE_PROXY_PASSWORD_HERE"
+}
+```
+
+These are the **Proxy Username** and **Proxy Password** from the
+[Webshare proxy settings page](https://dashboard.webshare.io/proxy/settings) — not
+your account login, and not an API token. Buy the **Residential** package; the
+other two products hand out fixed IPs and defeat the point. Without `--proxy` the
+two fields can be missing entirely; the script never reads them.
 
 Quota, against a 10,000 units/day default budget: enumerating the whole channel
 costs about 1 unit per 50 videos (~62 for 3,000 videos), plus 1 unit per video

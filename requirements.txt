@@ -5,10 +5,13 @@
 # get_transcript() the script called. Bump these on purpose, then run the
 # tests, rather than letting an install decide for you.
 #
-# requests is not listed: the script does not import it, and
-# youtube-transcript-api pulls it in anyway.
+# requests is listed because the script imports it directly: it catches
+# requests.exceptions.RequestException, which is how a proxied 429 wave surfaces.
+# youtube-transcript-api depends on it too, so this pin just makes the version
+# the script is tested against explicit.
 
 google-api-python-client==2.198.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.0
 youtube-transcript-api==1.2.4
+requests==2.32.3

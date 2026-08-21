@@ -15,6 +15,8 @@ from youtube_transcript_api import (
     VideoUnavailable,
     VideoUnplayable,
 )
+from youtube_transcript_api.proxies import WebshareProxyConfig
+import requests
 
 
 # Where the (gitignored) API key lives, alongside this script
@@ -45,6 +47,22 @@ NO_TRANSCRIPT_ERRORS = (
 # progress rather than carrying on and recording placeholders.
 BLOCKING_ERRORS = (RequestBlocked, PoTokenRequired)
 
+# The same thing, arriving as a transport failure instead of a library exception.
+# A proxied run does not usually get to raise RequestBlocked: WebshareProxyConfig
+# mounts urllib3's Retry(total=retries_when_blocked, status_forcelist=[429]) with
+# no backoff factor, so a 429 is retried ten times back to back — ten fresh proxy
+# IPs spent in a fraction of a second — and when the last one is refused too,
+# requests raises RetryError before youtube-transcript-api sees any response.
+#
+# The whole RequestException tree is here, not just RetryError, for the reason
+# blocking errors are not caught as NO_TRANSCRIPT: a request that never completed
+# is no evidence that a video lacks captions, and writing the placeholder for one
+# would degrade videos.json.
+TRANSPORT_ERRORS = (requests.exceptions.RequestException,)
+
+# Everything that should end a run early, saving progress rather than crashing
+RUN_ENDING_ERRORS = BLOCKING_ERRORS + TRANSPORT_ERRORS
+
 # Partially completed runs are saved here so a block does not discard the work
 CHECKPOINT_PATH = 'fetch-progress.json'
 
@@ -69,6 +87,44 @@ REQUEST_DELAY_SECONDS = 60.0
 # YouTube's limiter cares about regularity, only that it is cheap if it does.
 REQUEST_JITTER_SECONDS = (1.0, 10.0)
 
+# Pacing for --proxy runs, which go out through rotating residential IPs. The
+# throttling above exists because every direct request comes from this one IP, and
+# that is the thing YouTube counts; behind a rotating pool no single IP makes
+# enough requests to look like a scraper, so a minute of waiting per video buys
+# nothing.
+#
+# A guess again, and a softer one: 1 second is not a measured safe rate, it is
+# simply not flat out. Webshare bills by bandwidth rather than by request, so going
+# faster costs nothing extra there, but the IP pool is shared and hammering it is
+# how those IPs end up blocked for everyone. Raise it with --delay if proxied runs
+# start getting blocked.
+PROXY_REQUEST_DELAY_SECONDS = 1.0
+PROXY_REQUEST_JITTER_SECONDS = (0.0, 1.0)
+
+# How many exit IPs to try per video before giving up, and how long to pause
+# between draws. Every request through the rotating endpoint gets a fresh IP and
+# only a minority of them are refused, so the cheapest answer to a blocked draw is
+# to ask again rather than to wait.
+#
+# Measured, unlike the delays above: sampling 24 draws on 2026-08-21 found 2
+# refused, so roughly 8% arrive blocked. Eight attempts puts a stall at 0.08**8,
+# which is about one in seven hundred million videos. The measurement is small
+# (24 samples) and pool health will drift, so treat 8% as an order of magnitude,
+# not a constant.
+PROXY_ATTEMPTS_PER_VIDEO = 8
+PROXY_RETRY_PAUSE_SECONDS = 2.0
+
+# Ceiling on a single HTTP request, in seconds. youtube-transcript-api sets no
+# timeout anywhere (the word does not appear in the package) and requests defaults
+# to None, which means wait forever — so one silent proxy connection hangs the whole
+# run, with the checkpoint already written and nothing left to do but ctrl-c.
+#
+# A guess, but a safe direction: this is not tuning, it is putting any bound at all
+# where there was none. 30s is far longer than a healthy fetch, which runs about
+# 6s including the transcript. Applies to both connect and read; a timeout is a
+# RequestException, so fetch_with_retries() treats it as a bad draw and redraws.
+REQUEST_TIMEOUT_SECONDS = 30.0
+
 
 def next_delay():
     """How long to wait before the next video: the delay plus a random top-up."""
@@ -76,6 +132,10 @@ def next_delay():
 
 # Used only by --check, to see whether requests are getting through at all
 PROBE_VIDEO_ID = 'hoxM7jBBlaU'
+
+# Whether transcript requests go out through Webshare's residential proxies.
+# Set from --proxy before anything is fetched; see get_transcript_api().
+USE_PROXIES = False
 
 
 def load_api_key():
@@ -101,15 +161,132 @@ def load_api_key():
     return key
 
 
+def load_proxy_credentials():
+    """Webshare proxy username and password, from the environment or config.json.
+
+    Same two sources as the API key, in the same order, so there is one story for
+    where secrets live. These are the "Proxy Username" and "Proxy Password" from
+    https://dashboard.webshare.io/proxy/settings, not the account login.
+    """
+    username = os.environ.get('WEBSHARE_PROXY_USERNAME')
+    password = os.environ.get('WEBSHARE_PROXY_PASSWORD')
+
+    if not (username and password):
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except FileNotFoundError:
+            config = {}
+        except json.JSONDecodeError as e:
+            raise SystemExit(f'config.json is not valid JSON: {e}')
+
+        username = username or config.get('webshare_proxy_username')
+        password = password or config.get('webshare_proxy_password')
+
+    missing = [
+        name for name, value in (('username', username), ('password', password))
+        if not value or str(value).startswith('PASTE_')
+    ]
+    if missing:
+        raise SystemExit(
+            f'--proxy needs Webshare credentials, but the proxy '
+            f'{" and ".join(missing)} '
+            f'{"are" if len(missing) > 1 else "is"} not set.\n'
+            f'Put webshare_proxy_username and webshare_proxy_password in '
+            f'{CONFIG_PATH} (see config.example.json), or set '
+            'WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD.\n'
+            'They are the "Proxy Username" and "Proxy Password" from '
+            'https://dashboard.webshare.io/proxy/settings, not your account login.'
+        )
+
+    return username, password
+
+
+def build_proxy_config():
+    """A Webshare rotating-residential proxy config, or None for a direct run.
+
+    Only the "Residential" package rotates. "Proxy Server" and "Static
+    Residential" hand out fixed IPs, which is the situation this exists to escape:
+    they would get blocked exactly like a home IP does, only with a bill attached.
+    """
+    if not USE_PROXIES:
+        return None
+
+    username, password = load_proxy_credentials()
+    # retries_when_blocked=0 disables the library's own retry, which does not do
+    # what its name promises here. A refused draw is answered with a 302 to
+    # google.com/sorry, requests follows it, and urllib3's Retry then fires against
+    # the block page — ten requests for /sorry, which returns 429 for anyone,
+    # rather than one fresh attempt at the video. It burns the budget without ever
+    # redrawing an IP. fetch_with_retries() below does the redrawing instead.
+    return WebshareProxyConfig(
+        proxy_username=username,
+        proxy_password=password,
+        retries_when_blocked=0,
+    )
+
+
 _transcript_api = None
 
 
 def get_transcript_api():
-    """One shared client, so its HTTP session is reused across videos."""
+    """One shared client, so its HTTP session is reused across videos.
+
+    The client reads USE_PROXIES when it is built, so that flag has to be settled
+    before the first transcript request.
+    """
     global _transcript_api
     if _transcript_api is None:
-        _transcript_api = YouTubeTranscriptApi()
+        _transcript_api = YouTubeTranscriptApi(
+            proxy_config=build_proxy_config(),
+            http_client=TimeoutSession(),
+        )
     return _transcript_api
+
+
+class TimeoutSession(requests.Session):
+    """A Session that refuses to wait forever.
+
+    requests takes a timeout per call, and youtube-transcript-api never passes one,
+    so the only place to put a default is the Session itself. The library mutates
+    whatever client it is handed — proxies, headers, adapters — but it does not
+    replace it, so this override survives.
+    """
+
+    def request(self, *args, **kwargs):
+        kwargs.setdefault('timeout', REQUEST_TIMEOUT_SECONDS)
+        return super().request(*args, **kwargs)
+
+
+def reset_transcript_api():
+    """Drop the client so the next request opens a new connection.
+
+    Webshare hands out an exit IP per connection, so a fresh client is a fresh
+    draw from the pool.
+    """
+    global _transcript_api
+    _transcript_api = None
+
+
+def fetch_with_retries(video_id):
+    """Fetch one transcript, redrawing an exit IP when a draw comes back blocked.
+
+    Only proxied runs retry. Retrying a direct run would be pointless and rude:
+    there is one IP, YouTube has just refused it, and asking again is how the IP
+    got blocked in the first place.
+    """
+    attempts = PROXY_ATTEMPTS_PER_VIDEO if USE_PROXIES else 1
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return get_transcript_api().fetch(video_id)
+        except RUN_ENDING_ERRORS as error:
+            if attempt == attempts:
+                raise
+            print(f'  blocked draw ({type(error).__name__}); '
+                  f'redrawing an IP [{attempt + 1}/{attempts}]')
+            reset_transcript_api()
+            time.sleep(PROXY_RETRY_PAUSE_SECONDS)
 
 
 def fetch_transcript(video_id):
@@ -118,7 +295,7 @@ def fetch_transcript(video_id):
     Blocking errors are not caught here on purpose; see NO_TRANSCRIPT_ERRORS.
     """
     try:
-        fetched = get_transcript_api().fetch(video_id)
+        fetched = fetch_with_retries(video_id)
     except NO_TRANSCRIPT_ERRORS as error:
         print(f'Transcript not available ({type(error).__name__}).')
         return NO_TRANSCRIPT
@@ -135,6 +312,10 @@ def check_block_status():
     """
     try:
         get_transcript_api().fetch(PROBE_VIDEO_ID)
+    except TRANSPORT_ERRORS as error:
+        # A 429 wave looks like this rather than like RequestBlocked; see TRANSPORT_ERRORS
+        print(f'BLOCKED, or the proxy is refusing requests ({type(error).__name__}).')
+        return False
     except BLOCKING_ERRORS as error:
         print(f'BLOCKED ({type(error).__name__}). Wait longer before running again.')
         return False
@@ -247,9 +428,9 @@ def clear_checkpoint():
 def fetch_videos(youtube, video_ids, already_fetched):
     """Fetch each video in turn, checkpointing as it goes.
 
-    Returns (fetched, blocking_error). A blocking error is handed back rather than
-    raised so the caller can save progress and say how to resume; everything
-    fetched before it is kept.
+    Returns (fetched, error). A run-ending error is handed back rather than raised
+    so the caller can save progress and say how to resume; everything fetched
+    before it is kept.
     """
     fetched = []
     total = len(video_ids)
@@ -257,7 +438,7 @@ def fetch_videos(youtube, video_ids, already_fetched):
     for index, video_id in enumerate(video_ids, start=1):
         try:
             details = get_video_details(youtube, video_id)
-        except BLOCKING_ERRORS as error:
+        except RUN_ENDING_ERRORS as error:
             save_checkpoint(already_fetched + fetched)
             return fetched, error
 
@@ -277,6 +458,51 @@ def fetch_videos(youtube, video_ids, already_fetched):
             time.sleep(delay)
 
     return fetched, None
+
+
+def describe_run_ending_error(error):
+    """What stopped the run, and what to do about it.
+
+    The two cases want different advice: a RequestBlocked means this IP is in
+    trouble and needs to sit out, while a proxied failure means every one of the
+    redraws was refused, which is about pool health rather than pace.
+    """
+    name = type(error).__name__
+
+    if isinstance(error, TRANSPORT_ERRORS):
+        if USE_PROXIES:
+            message = (
+                f'All {PROXY_ATTEMPTS_PER_VIDEO} exit IPs drawn for this video were '
+                f'refused ({name}).\n'
+                'A longer --delay will not help — the pace is not what decides this, '
+                'the draw is.\n'
+                'The pool is unusually blocked right now; rerun later, or raise '
+                'PROXY_ATTEMPTS_PER_VIDEO.'
+            )
+        else:
+            message = (
+                f'The request failed at the network level ({name}).\n'
+                'Check the connection, or try --proxy.'
+            )
+
+        # The host in a requests error is the whole diagnosis: www.google.com means
+        # YouTube served its block page, while the proxy host means Webshare itself
+        # refused (out of bandwidth, or over an account rate limit). The class name
+        # alone makes those two look identical. It goes on its own line because it
+        # is long enough to shred the sentence if inlined.
+        detail = str(error).strip()
+        return f'{message}\n  detail: {detail[:300]}' if detail else message
+
+    if USE_PROXIES:
+        return (
+            f'YouTube blocked the request ({name}), through the proxies.\n'
+            'Resume with a longer pause, e.g. --proxy --delay 5.'
+        )
+
+    return (
+        f'YouTube blocked the request ({name}).\n'
+        'Wait for the block to clear before running again — or use --proxy.'
+    )
 
 
 def dedupe_videos(videos):
@@ -343,18 +569,17 @@ def main():
         print(f'at ~{average_delay:.0f}s between videos that is roughly {hours:.1f}h '
               f'of waiting. Progress is saved as it goes; ctrl-c is safe.')
 
-    newly_fetched, blocking_error = fetch_videos(youtube, missing_ids, checkpoint)
+    newly_fetched, run_ending_error = fetch_videos(youtube, missing_ids, checkpoint)
     all_new = checkpoint + newly_fetched
 
-    if blocking_error:
+    if run_ending_error:
         # fetch_videos saves before returning; repeat it here so the guarantee
         # does not depend on which function noticed the block
         save_checkpoint(all_new)
         raise SystemExit(
-            f'\nYouTube blocked the request ({type(blocking_error).__name__}).\n'
+            f'\n{describe_run_ending_error(run_ending_error)}\n'
             f'{len(all_new)} video(s) saved to {CHECKPOINT_PATH}; nothing was lost.\n'
-            'Wait for the block to clear, then run this script again to carry on '
-            'from where it stopped.'
+            'Run this script again to carry on from where it stopped.'
         )
 
     # Merge existing videos with new videos, collapsing any repeated ids
@@ -386,20 +611,48 @@ def parse_args(argv=None):
         help='make one request to see whether YouTube is blocking this IP, then exit',
     )
     parser.add_argument(
+        '--proxy',
+        action='store_true',
+        help='route transcript requests through Webshare residential proxies '
+             'instead of this machine\'s IP (needs Webshare credentials)',
+    )
+    parser.add_argument(
         '--delay',
         type=float,
-        default=REQUEST_DELAY_SECONDS,
+        default=None,
         metavar='SECONDS',
-        help='pause between videos (default: %(default)s)',
+        help=f'pause between videos (default: {REQUEST_DELAY_SECONDS:g}, '
+             f'or {PROXY_REQUEST_DELAY_SECONDS:g} with --proxy)',
     )
     return parser.parse_args(argv)
+
+
+def resolve_pacing(args):
+    """The (delay, jitter) a run should use, given the flags.
+
+    An explicit --delay always wins. Otherwise --proxy picks the much shorter
+    proxied pacing, since the long pause is there to protect one IP and a proxied
+    run is not using one.
+    """
+    if args.proxy:
+        default_delay, jitter = PROXY_REQUEST_DELAY_SECONDS, PROXY_REQUEST_JITTER_SECONDS
+    else:
+        default_delay, jitter = REQUEST_DELAY_SECONDS, REQUEST_JITTER_SECONDS
+
+    return (default_delay if args.delay is None else args.delay), jitter
 
 
 if __name__ == "__main__":
     args = parse_args()
 
+    # Before anything fetches: get_transcript_api() reads this when it builds the
+    # client, and --check fetches too
+    USE_PROXIES = args.proxy
+    if USE_PROXIES:
+        print('using Webshare residential proxies.')
+
     if args.check:
         raise SystemExit(0 if check_block_status() else 1)
 
-    REQUEST_DELAY_SECONDS = args.delay
+    REQUEST_DELAY_SECONDS, REQUEST_JITTER_SECONDS = resolve_pacing(args)
     main()

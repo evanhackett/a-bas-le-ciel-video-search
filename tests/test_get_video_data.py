@@ -13,6 +13,12 @@ from youtube_transcript_api import (
     VideoUnavailable,
     VideoUnplayable,
 )
+from youtube_transcript_api.proxies import WebshareProxyConfig
+from requests.exceptions import (
+    ConnectionError as RequestsConnectionError,
+    ReadTimeout,
+    RetryError,
+)
 
 from conftest import FakeYouTube, video_api_response
 
@@ -192,6 +198,15 @@ BLOCKING_FAILURES = [
     pytest.param(PoTokenRequired('vid'), id='PoTokenRequired'),
 ]
 
+# The same block arriving as a transport error, which is what a proxied run
+# actually sees: Webshare's retry config exhausts its rotations on 429s and
+# requests raises before youtube-transcript-api can classify the response.
+TRANSPORT_FAILURES = [
+    pytest.param(RetryError('too many 429 error responses'), id='RetryError'),
+    pytest.param(RequestsConnectionError('proxy refused'), id='ConnectionError'),
+    pytest.param(ReadTimeout('proxy went quiet'), id='ReadTimeout'),
+]
+
 
 class TestFetchTranscript:
     def test_joins_snippet_text_with_spaces(self, gvd, monkeypatch):
@@ -224,9 +239,157 @@ class TestFetchTranscript:
         with pytest.raises(type(error)):
             gvd.fetch_transcript('vid')
 
+    @pytest.mark.parametrize('error', TRANSPORT_FAILURES)
+    def test_transport_errors_are_not_swallowed(self, gvd, monkeypatch, error):
+        """A request that never completed says nothing about a video's captions.
+
+        This is the crash that ended the first proxied run: it is a block, but it
+        arrives as requests.RetryError rather than RequestBlocked.
+        """
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
+
+        with pytest.raises(type(error)):
+            gvd.fetch_transcript('vid')
+
     def test_the_client_is_created_once_and_reused(self, gvd):
         """One client keeps its HTTP session warm across videos."""
         assert gvd.get_transcript_api() is gvd.get_transcript_api()
+
+
+class FlakyTranscriptApi:
+    """Refuses the first `failures` draws, then serves a transcript."""
+
+    def __init__(self, failures, error, texts=('words',)):
+        self.remaining = failures
+        self.error = error
+        self.texts = list(texts)
+        self.calls = 0
+
+    def fetch(self, video_id):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise self.error
+        return [FakeSnippet(text) for text in self.texts]
+
+
+class TestFetchWithRetries:
+    @pytest.fixture(autouse=True)
+    def _no_sleeping(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd.time, 'sleep', lambda seconds: None)
+
+    def _proxied(self, gvd, monkeypatch, api):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        monkeypatch.setattr(gvd, 'get_transcript_api', lambda: api)
+        return api
+
+    @pytest.mark.parametrize('error', TRANSPORT_FAILURES + BLOCKING_FAILURES)
+    def test_a_blocked_draw_is_retried_until_a_clean_ip_answers(self, gvd, monkeypatch, error):
+        """The whole point: ~8% of draws are refused, so ask again."""
+        api = self._proxied(gvd, monkeypatch, FlakyTranscriptApi(3, error))
+
+        assert [s.text for s in gvd.fetch_with_retries('vid')] == ['words']
+        assert api.calls == 4        # three refusals, then a clean draw
+
+    def test_the_client_is_dropped_between_draws(self, gvd, monkeypatch):
+        """An exit IP belongs to a connection, so a new draw needs a new client."""
+        resets = []
+        monkeypatch.setattr(gvd, 'reset_transcript_api', lambda: resets.append(1))
+        self._proxied(gvd, monkeypatch, FlakyTranscriptApi(2, RetryError('429')))
+
+        gvd.fetch_with_retries('vid')
+
+        assert len(resets) == 2
+
+    def test_gives_up_after_the_attempt_budget(self, gvd, monkeypatch):
+        error = RetryError('429')
+        api = self._proxied(gvd, monkeypatch, FlakyTranscriptApi(99, error))
+
+        with pytest.raises(RetryError):
+            gvd.fetch_with_retries('vid')
+
+        assert api.calls == gvd.PROXY_ATTEMPTS_PER_VIDEO
+
+    def test_a_direct_run_never_retries(self, gvd, monkeypatch):
+        """There is one IP and YouTube just refused it; asking again is what got it
+        blocked in the first place."""
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        api = FlakyTranscriptApi(1, IpBlocked('vid'))
+        monkeypatch.setattr(gvd, 'get_transcript_api', lambda: api)
+
+        with pytest.raises(IpBlocked):
+            gvd.fetch_with_retries('vid')
+
+        assert api.calls == 1
+
+    def test_a_clean_first_draw_costs_nothing_extra(self, gvd, monkeypatch):
+        api = self._proxied(gvd, monkeypatch, FlakyTranscriptApi(0, RetryError('429')))
+
+        gvd.fetch_with_retries('vid')
+
+        assert api.calls == 1
+
+    @pytest.mark.parametrize('error', PER_VIDEO_FAILURES)
+    def test_a_video_without_captions_is_not_retried(self, gvd, monkeypatch, error):
+        """Redrawing an IP cannot conjure captions that do not exist."""
+        api = self._proxied(gvd, monkeypatch, FlakyTranscriptApi(99, error))
+
+        with pytest.raises(type(error)):
+            gvd.fetch_with_retries('vid')
+
+        assert api.calls == 1
+
+    def test_the_placeholder_path_still_works_through_the_retry_loop(self, gvd, monkeypatch):
+        """fetch_transcript delegates here, so its contract must survive."""
+        self._proxied(gvd, monkeypatch, FlakyTranscriptApi(2, RetryError('429')))
+        assert gvd.fetch_transcript('vid') == 'words'
+
+
+class TestTimeoutSession:
+    """The library passes no timeout, and requests defaults to waiting forever.
+
+    That is how a run reached its last video and hung there: the checkpoint was
+    already written, so the only way out was ctrl-c.
+    """
+
+    def test_a_default_timeout_is_applied(self, gvd, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(gvd.requests.Session, 'request',
+                            lambda self, *a, **kw: captured.update(kw))
+
+        gvd.TimeoutSession().get('https://example.com')
+
+        assert captured['timeout'] == gvd.REQUEST_TIMEOUT_SECONDS
+
+    def test_an_explicit_timeout_is_not_overridden(self, gvd, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(gvd.requests.Session, 'request',
+                            lambda self, *a, **kw: captured.update(kw))
+
+        gvd.TimeoutSession().get('https://example.com', timeout=5)
+
+        assert captured['timeout'] == 5
+
+    def test_the_transcript_client_gets_one(self, gvd, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi',
+                            lambda **kwargs: captured.update(kwargs))
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+
+        gvd.get_transcript_api()
+
+        assert isinstance(captured['http_client'], gvd.TimeoutSession)
+
+
+class TestResetTranscriptApi:
+    def test_the_next_client_is_a_new_one(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi', lambda **kwargs: object())
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+
+        first = gvd.get_transcript_api()
+        gvd.reset_transcript_api()
+
+        assert gvd.get_transcript_api() is not first
 
 
 class TestCheckBlockStatus:
@@ -236,6 +399,11 @@ class TestCheckBlockStatus:
 
     @pytest.mark.parametrize('error', BLOCKING_FAILURES)
     def test_reports_blocked_on_a_blocking_error(self, gvd, monkeypatch, error):
+        use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
+        assert gvd.check_block_status() is False
+
+    @pytest.mark.parametrize('error', TRANSPORT_FAILURES)
+    def test_reports_blocked_on_a_transport_error(self, gvd, monkeypatch, error):
         use_transcript_api(gvd, monkeypatch, FakeTranscriptApi(error=error))
         assert gvd.check_block_status() is False
 
@@ -270,13 +438,166 @@ class TestParseArgs:
     def test_defaults_to_a_normal_run(self, gvd):
         args = gvd.parse_args([])
         assert args.check is False
-        assert args.delay == gvd.REQUEST_DELAY_SECONDS
+        assert args.proxy is False
+        assert args.delay is None      # unset, so resolve_pacing picks the default
 
     def test_check_flag(self, gvd):
         assert gvd.parse_args(['--check']).check is True
 
+    def test_proxy_flag(self, gvd):
+        assert gvd.parse_args(['--proxy']).proxy is True
+
     def test_delay_overrides_the_default(self, gvd):
         assert gvd.parse_args(['--delay', '7.5']).delay == 7.5
+
+
+class TestResolvePacing:
+    def test_a_direct_run_uses_the_slow_pacing(self, gvd):
+        delay, jitter = gvd.resolve_pacing(gvd.parse_args([]))
+        assert (delay, jitter) == (gvd.REQUEST_DELAY_SECONDS, gvd.REQUEST_JITTER_SECONDS)
+
+    def test_a_proxied_run_uses_the_fast_pacing(self, gvd):
+        """The minute-long pause protects one IP; a rotating pool does not need it."""
+        delay, jitter = gvd.resolve_pacing(gvd.parse_args(['--proxy']))
+        assert (delay, jitter) == (gvd.PROXY_REQUEST_DELAY_SECONDS,
+                                   gvd.PROXY_REQUEST_JITTER_SECONDS)
+
+    def test_the_proxied_pacing_is_faster_than_the_direct_one(self, gvd):
+        assert gvd.PROXY_REQUEST_DELAY_SECONDS < gvd.REQUEST_DELAY_SECONDS
+
+    def test_an_explicit_delay_wins_over_the_default(self, gvd):
+        assert gvd.resolve_pacing(gvd.parse_args(['--delay', '7.5']))[0] == 7.5
+
+    def test_an_explicit_delay_wins_in_proxy_mode_too(self, gvd):
+        delay, jitter = gvd.resolve_pacing(gvd.parse_args(['--proxy', '--delay', '30']))
+        assert delay == 30
+        assert jitter == gvd.PROXY_REQUEST_JITTER_SECONDS
+
+    def test_a_zero_delay_is_honoured_rather_than_treated_as_unset(self, gvd):
+        """0 is falsy, so 'if not args.delay' would silently ignore --delay 0."""
+        assert gvd.resolve_pacing(gvd.parse_args(['--delay', '0']))[0] == 0.0
+
+
+# --- proxies --------------------------------------------------------------
+
+class TestLoadProxyCredentials:
+    @pytest.fixture(autouse=True)
+    def _no_env_credentials(self, monkeypatch):
+        monkeypatch.delenv('WEBSHARE_PROXY_USERNAME', raising=False)
+        monkeypatch.delenv('WEBSHARE_PROXY_PASSWORD', raising=False)
+
+    def _config(self, gvd, tmp_path, monkeypatch, contents):
+        monkeypatch.setattr(gvd, 'CONFIG_PATH', write_config(tmp_path, contents))
+
+    def test_reads_both_values_from_config_json(self, gvd, tmp_path, monkeypatch):
+        self._config(gvd, tmp_path, monkeypatch, {
+            'webshare_proxy_username': 'user', 'webshare_proxy_password': 'pass',
+        })
+
+        assert gvd.load_proxy_credentials() == ('user', 'pass')
+
+    def test_environment_variables_win_over_the_file(self, gvd, tmp_path, monkeypatch):
+        monkeypatch.setenv('WEBSHARE_PROXY_USERNAME', 'env-user')
+        monkeypatch.setenv('WEBSHARE_PROXY_PASSWORD', 'env-pass')
+        self._config(gvd, tmp_path, monkeypatch, {
+            'webshare_proxy_username': 'file-user', 'webshare_proxy_password': 'file-pass',
+        })
+
+        assert gvd.load_proxy_credentials() == ('env-user', 'env-pass')
+
+    def test_the_two_sources_can_be_mixed(self, gvd, tmp_path, monkeypatch):
+        monkeypatch.setenv('WEBSHARE_PROXY_USERNAME', 'env-user')
+        self._config(gvd, tmp_path, monkeypatch, {'webshare_proxy_password': 'file-pass'})
+
+        assert gvd.load_proxy_credentials() == ('env-user', 'file-pass')
+
+    def test_missing_config_explains_how_to_fix_it(self, gvd, tmp_path, monkeypatch):
+        monkeypatch.setattr(gvd, 'CONFIG_PATH', tmp_path / 'missing.json')
+
+        with pytest.raises(SystemExit) as excinfo:
+            gvd.load_proxy_credentials()
+
+        message = str(excinfo.value)
+        assert 'config.example.json' in message
+        assert 'WEBSHARE_PROXY_USERNAME' in message
+
+    def test_a_half_filled_config_is_rejected(self, gvd, tmp_path, monkeypatch):
+        self._config(gvd, tmp_path, monkeypatch, {'webshare_proxy_username': 'user'})
+
+        with pytest.raises(SystemExit) as excinfo:
+            gvd.load_proxy_credentials()
+
+        assert 'password' in str(excinfo.value)
+
+    def test_unedited_template_placeholders_are_rejected(self, gvd, tmp_path, monkeypatch):
+        self._config(gvd, tmp_path, monkeypatch, {
+            'webshare_proxy_username': 'PASTE_YOUR_WEBSHARE_PROXY_USERNAME_HERE',
+            'webshare_proxy_password': 'PASTE_YOUR_WEBSHARE_PROXY_PASSWORD_HERE',
+        })
+
+        with pytest.raises(SystemExit):
+            gvd.load_proxy_credentials()
+
+    def test_malformed_config_reports_a_json_error(self, gvd, tmp_path, monkeypatch):
+        self._config(gvd, tmp_path, monkeypatch, '{ not json')
+
+        with pytest.raises(SystemExit) as excinfo:
+            gvd.load_proxy_credentials()
+
+        assert 'not valid JSON' in str(excinfo.value)
+
+
+class TestBuildProxyConfig:
+    def test_a_direct_run_has_no_proxy_config(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        assert gvd.build_proxy_config() is None
+
+    def test_a_direct_run_does_not_need_credentials(self, gvd, monkeypatch):
+        """Without --proxy the Webshare fields may be absent entirely."""
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        monkeypatch.setattr(gvd, 'load_proxy_credentials',
+                            lambda: pytest.fail('should not read proxy credentials'))
+
+        assert gvd.build_proxy_config() is None
+
+    def test_a_proxied_run_builds_a_webshare_config_from_the_credentials(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        monkeypatch.setattr(gvd, 'load_proxy_credentials', lambda: ('user', 'pass'))
+
+        config = gvd.build_proxy_config()
+
+        assert isinstance(config, WebshareProxyConfig)
+        assert 'user' in config.url and 'pass' in config.url
+
+    def test_the_pool_rotates(self, gvd, monkeypatch):
+        """A fixed exit IP would get blocked exactly like this machine's does."""
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        monkeypatch.setattr(gvd, 'load_proxy_credentials', lambda: ('user', 'pass'))
+
+        assert '-rotate' in gvd.build_proxy_config().url
+
+
+class TestTranscriptApiClient:
+    def test_the_client_is_built_without_a_proxy_by_default(self, gvd, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi',
+                            lambda **kwargs: captured.setdefault('proxy', kwargs['proxy_config']))
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+
+        gvd.get_transcript_api()
+
+        assert captured['proxy'] is None
+
+    def test_the_client_is_built_with_the_proxy_config_when_proxying(self, gvd, monkeypatch):
+        sentinel = object()
+        captured = {}
+        monkeypatch.setattr(gvd, 'YouTubeTranscriptApi',
+                            lambda **kwargs: captured.setdefault('proxy', kwargs['proxy_config']))
+        monkeypatch.setattr(gvd, 'build_proxy_config', lambda: sentinel)
+
+        gvd.get_transcript_api()
+
+        assert captured['proxy'] is sentinel
 
 
 # --- get_video_details ----------------------------------------------------
@@ -513,6 +834,26 @@ class TestFetchVideos:
         saved = gvd.load_checkpoint()
         assert [v['id'] for v in saved] == ['earlier', 'a']
 
+    @pytest.mark.parametrize('error', TRANSPORT_FAILURES)
+    def test_stops_and_checkpoints_on_a_transport_error(self, gvd, monkeypatch, error):
+        """Regression: this used to escape as a traceback mid-run.
+
+        The work was still on disk thanks to CHECKPOINT_EVERY = 1, but the run died
+        without saying so or explaining how to resume.
+        """
+        def details(youtube, vid):
+            if vid == 'boom':
+                raise error
+            return rec(vid)
+
+        self._details(gvd, monkeypatch, details)
+
+        fetched, returned = gvd.fetch_videos(None, ['a', 'boom', 'c'], [])
+
+        assert [v['id'] for v in fetched] == ['a']
+        assert returned is error
+        assert [v['id'] for v in gvd.load_checkpoint()] == ['a']
+
     def test_checkpoints_periodically_during_a_long_run(self, gvd, monkeypatch):
         self._details(gvd, monkeypatch, lambda youtube, vid: rec(vid))
         monkeypatch.setattr(gvd, 'CHECKPOINT_EVERY', 2)
@@ -553,6 +894,72 @@ class TestFetchVideos:
 
         with pytest.raises(ValueError):
             gvd.fetch_videos(None, ['a'], [])
+
+
+# --- describe_run_ending_error --------------------------------------------
+
+class TestDescribeRunEndingError:
+    def test_a_direct_block_says_to_wait(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        message = gvd.describe_run_ending_error(IpBlocked('vid'))
+
+        assert 'IpBlocked' in message
+        assert 'Wait' in message
+
+    def test_a_proxied_failure_does_not_blame_the_pace(self, gvd, monkeypatch):
+        """Both obvious answers are wrong here, so the message rules them out.
+
+        Waiting does nothing (the pool rotates; there is no IP of yours to sit out)
+        and slowing down does nothing (a refused draw is refused at any pace). The
+        run with --delay 10 got fewer videos than the one at 1.3s.
+        """
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        message = gvd.describe_run_ending_error(RetryError('too many 429 error responses'))
+
+        assert 'will not help' in message      # about --delay specifically
+        assert 'Wait' not in message
+        assert str(gvd.PROXY_ATTEMPTS_PER_VIDEO) in message
+
+    def test_a_transport_error_keeps_the_host_that_identifies_the_culprit(self, gvd, monkeypatch):
+        """www.google.com means YouTube refused; the proxy host means Webshare did.
+
+        Printing only the class name made those two indistinguishable, which is
+        the difference between "slow down" and "top up your bandwidth".
+        """
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        error = RetryError(
+            "HTTPSConnectionPool(host='www.google.com', port=443): Max retries "
+            "exceeded with url: /sorry/index (Caused by ResponseError('too many "
+            "429 error responses'))"
+        )
+
+        message = gvd.describe_run_ending_error(error)
+
+        assert 'www.google.com' in message
+        assert '/sorry/index' in message
+
+    def test_a_transport_error_without_a_message_still_reads_cleanly(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', True)
+        message = gvd.describe_run_ending_error(RetryError())
+
+        assert 'RetryError' in message
+        assert ': \n' not in message      # no dangling colon where the detail would go
+
+    def test_a_direct_transport_error_suggests_the_proxies(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        message = gvd.describe_run_ending_error(RequestsConnectionError('no route'))
+
+        assert '--proxy' in message
+
+    def test_a_direct_block_suggests_the_proxies_too(self, gvd, monkeypatch):
+        monkeypatch.setattr(gvd, 'USE_PROXIES', False)
+        assert '--proxy' in gvd.describe_run_ending_error(RequestBlocked('vid'))
+
+    def test_every_case_names_the_exception(self, gvd, monkeypatch):
+        for proxies in (True, False):
+            monkeypatch.setattr(gvd, 'USE_PROXIES', proxies)
+            for error in (IpBlocked('vid'), PoTokenRequired('vid'), RetryError('x')):
+                assert type(error).__name__ in gvd.describe_run_ending_error(error)
 
 
 # --- main -----------------------------------------------------------------
@@ -681,7 +1088,7 @@ class TestMain:
 
         message = str(excinfo.value)
         assert gvd.CHECKPOINT_PATH in message
-        assert 'run this script again' in message
+        assert 'carry on from where it stopped' in message
 
         # the partial work survives, and videos.json is not half-updated
         assert [v['id'] for v in gvd.load_checkpoint()] == ['a']
