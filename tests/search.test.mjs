@@ -92,14 +92,28 @@ describe('highlightText', () => {
         assert.equal(highlightText('nothing here', ['absent']), 'nothing here');
     });
 
-    // Known bug: the token is interpolated straight into a RegExp, so regex
-    // metacharacters throw instead of being matched literally. Marked todo so it
-    // is recorded without failing the suite; it will pass once escaped.
-    test('treats regex metacharacters as literal text', { todo: true }, () => {
+    // Regression: the token used to be interpolated straight into a RegExp, so a
+    // query containing a metacharacter threw a SyntaxError instead of matching.
+    test('treats regex metacharacters as literal text', () => {
         assert.equal(
             highlightText('a (parenthesis) here', ['(']),
             'a <span class="highlight">(</span>parenthesis) here',
         );
+    });
+
+    test('does not throw on any metacharacter', () => {
+        for (const token of ['(', ')', '[', ']', '*', '+', '?', '.', '^', '$', '|', '\\']) {
+            assert.doesNotThrow(() => highlightText(`a ${token} b`, [token]), `token ${token}`);
+        }
+    });
+
+    test('a metacharacter token still matches its literal occurrence', () => {
+        assert.ok(highlightText('2 + 2', ['+']).includes('>+<'));
+    });
+
+    test('does not let a token match as a wildcard', () => {
+        // '.' as a regex would highlight every character; escaped it matches only a dot
+        assert.equal(highlightText('ab.cd', ['.']), 'ab<span class="highlight">.</span>cd');
     });
 });
 

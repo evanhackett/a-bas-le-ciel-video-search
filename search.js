@@ -22,11 +22,20 @@ export function formatDate(dateString) {
     return `${day.padStart(2, '0')} ${MONTHS[parseInt(month, 10) - 1]} ${year}`;
 }
 
+/**
+ * Escape a string so it matches literally inside a RegExp.
+ * Search tokens come straight from the user, and a query containing `(`, `[` or
+ * `*` used to throw a SyntaxError rather than find anything.
+ */
+export function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Wrap every occurrence of each token in a highlight span. */
 export function highlightText(text, queryTokens) {
     let highlightedText = text;
     queryTokens.forEach(token => {
-        const regex = new RegExp(`(${token})`, 'gi');
+        const regex = new RegExp(`(${escapeRegExp(token)})`, 'gi');
         highlightedText = highlightedText.replace(regex, '<span class="highlight">$1</span>');
     });
     return highlightedText;
