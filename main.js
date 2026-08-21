@@ -27,7 +27,11 @@ export function loadVideoData() {
 
         xhr.onprogress = function(event) {
             if (event.lengthComputable) {
-                const percentComplete = (event.loaded / event.total) * 100;
+                // Capped because the two numbers can measure different things:
+                // GitHub Pages serves videos.json gzipped, so event.total is the
+                // compressed size while event.loaded counts decompressed bytes.
+                // Uncapped that reaches ~291% and the bar overflows its container.
+                const percentComplete = Math.min(100, (event.loaded / event.total) * 100);
                 progressBar.style.width = `${percentComplete}%`;
                 progressBarContainer.style.display = 'block';
             }

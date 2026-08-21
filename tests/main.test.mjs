@@ -81,14 +81,20 @@ describe('load progress bar', () => {
         assert.equal(app.$('#progress-bar').style.width, '25%');
     });
 
-    // Known bug (see README): GitHub Pages gzips videos.json, so event.total is the
-    // compressed size (~17.9MB) while event.loaded counts decompressed bytes (~52MB).
-    // The bar reaches ~291% and snaps to full immediately. Locally there is no gzip,
-    // which is why it only misbehaves on the deployed site.
-    test('caps the bar at 100% when the server reports a compressed length', { todo: true }, () => {
+    // Regression (see README): GitHub Pages gzips videos.json, so event.total is the
+    // compressed size while event.loaded counts decompressed bytes. Uncapped that
+    // reached ~291%. Locally there is no gzip, which is why it only ever misbehaved
+    // on the deployed site.
+    test('caps the bar at 100% when the server reports a compressed length', () => {
         FakeXHR.last.progress(52_258_072, 17_969_259);
         const width = parseFloat(app.$('#progress-bar').style.width);
         assert.ok(width <= 100, `bar reached ${width}%`);
+    });
+
+    test('still reports genuine intermediate progress', () => {
+        // The cap must not flatten every reading to 100%
+        FakeXHR.last.progress(25, 100);
+        assert.equal(app.$('#progress-bar').style.width, '25%');
     });
 });
 
