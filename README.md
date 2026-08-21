@@ -18,7 +18,7 @@ natively — there is nothing to compile or bundle.
 | `search.js` | Pure logic: matching, tokenizing, date formatting, highlighting. No DOM. |
 | `main.js` | DOM: fetches `videos.json`, renders results, paginates, wires events. |
 | `styles.css` | All styling. |
-| `videos.json` | **The dataset.** ~52 MB, one object per video. |
+| `videos.json` | **The dataset.** ~53 MB, one object per video. |
 
 `loadVideoData()` XHRs `videos.json` into a module-level array, then `searchVideos()`
 filters it with plain substring matching over whichever of
@@ -93,10 +93,9 @@ fixed. Currently these cover the regex-injection bug in `highlightText()`, the
 progress bar exceeding 100% on GitHub Pages, and the pagination buttons staying
 enabled when a search returns nothing.
 
-`test_data_integrity.py` runs against the real 52 MB dataset, so it catches
+`test_data_integrity.py` runs against the real 53 MB dataset, so it catches
 problems the unit tests cannot — malformed dates, mismatched URLs, duplicate ids.
-**The duplicate-id check currently fails** on the 7 known duplicates; see
-[Known issues](#known-issues).
+It passes as of the 2026-08-21 backfill, which merged away the last 7 duplicates.
 
 Neither suite talks to the YouTube API or needs a key.
 
@@ -439,14 +438,10 @@ You will see these locally but not in a fresh clone.
 
 - **The load progress bar is broken on the live site but fine locally.** GitHub Pages
   serves `videos.json` gzipped with `Content-Length: ~17.9 MB` (compressed), but
-  XHR's `event.loaded` counts *decompressed* bytes, up to ~52 MB. So `loaded / total`
+  XHR's `event.loaded` counts *decompressed* bytes, up to ~53 MB. So `loaded / total`
   reaches ~291% and the bar snaps to full almost immediately. Locally there's no
   gzip, so the two numbers agree. Fix by dividing against the known uncompressed
   size instead of `event.total`, or switch to an indeterminate spinner.
-- **`videos.json` still contains 7 duplicate video IDs** (fixed in the script, not
-  yet in the data). `dedupe_videos()` now collapses repeated ids during the merge,
-  so the next run that finds new videos will clean these out on its own. Note the
-  script returns early when there's nothing new, so a no-op run won't fix them.
 - **Pagination overflows on narrow screens.** The `@media (max-width: 740px)` block
   only restyles the result cards. `.pagination` stays `display: flex` with no
   `flex-wrap`, so five buttons plus the page counter plus the results-per-page
