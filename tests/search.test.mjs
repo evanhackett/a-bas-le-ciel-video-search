@@ -14,8 +14,9 @@ import {
     validateQuery,
 } from '../search.js';
 
-const ALL_FIELDS = { title: true, description: true, transcript: true, isExact: true };
-const ANY_WORD = { ...ALL_FIELDS, isExact: false };
+const ALL_FIELDS = { title: true, description: true, transcript: true, mode: 'exact' };
+const ANY_WORD = { ...ALL_FIELDS, mode: 'any' };
+const ALL_WORDS = { ...ALL_FIELDS, mode: 'all' };
 
 const video = (over = {}) => ({
     title: 'Antinatalism and ecology',
@@ -164,8 +165,47 @@ describe('matchesQuery', () => {
         assert.ok(!matchesQuery(video(), 'zebra giraffe', ['zebra', 'giraffe'], ANY_WORD));
     });
 
+    test('all-words mode matches when every token hits', () => {
+        assert.ok(matchesQuery(video(), 'ecology antinatalism', ['ecology', 'antinatalism'], ALL_WORDS));
+    });
+
+    test('all-words mode rejects when one token misses', () => {
+        assert.ok(!matchesQuery(video(), 'ecology zebra', ['ecology', 'zebra'], ALL_WORDS));
+    });
+
+    test('all-words mode ignores word order', () => {
+        // "antinatalism and ecology" in the title, queried backwards
+        assert.ok(matchesQuery(video(), 'ecology antinatalism', ['ecology', 'antinatalism'], ALL_WORDS));
+    });
+
+    test('all-words mode spans fields', () => {
+        // one word from the title, one from the description
+        assert.ok(matchesQuery(video(), 'ecology ethics', ['ecology', 'ethics'], ALL_WORDS));
+    });
+
+    test('the three modes genuinely disagree', () => {
+        // The point of adding 'all': it is not a synonym for either neighbour.
+        const tokens = ['ecology', 'zebra'];
+        const q = 'ecology zebra';
+
+        assert.ok(!matchesQuery(video(), q, tokens, ALL_FIELDS), 'exact: phrase absent');
+        assert.ok(matchesQuery(video(), q, tokens, ANY_WORD), 'any: ecology hits');
+        assert.ok(!matchesQuery(video(), q, tokens, ALL_WORDS), 'all: zebra misses');
+
+        // and where all/any agree, exact still differs
+        const both = ['ecology', 'antinatalism'];
+        assert.ok(!matchesQuery(video(), 'ecology antinatalism', both, ALL_FIELDS));
+        assert.ok(matchesQuery(video(), 'ecology antinatalism', both, ANY_WORD));
+        assert.ok(matchesQuery(video(), 'ecology antinatalism', both, ALL_WORDS));
+    });
+
+    test('an unknown mode falls back to any-word', () => {
+        const legacy = { ...ALL_FIELDS, mode: undefined };
+        assert.ok(matchesQuery(video(), 'ecology zebra', ['ecology', 'zebra'], legacy));
+    });
+
     test('respects disabled fields', () => {
-        const titleOnly = { title: true, description: false, transcript: false, isExact: true };
+        const titleOnly = { title: true, description: false, transcript: false, mode: 'exact' };
         assert.ok(!matchesQuery(video(), 'ethics', [], titleOnly));
         assert.ok(matchesQuery(video(), 'ethics', [], ALL_FIELDS));
     });
@@ -229,6 +269,15 @@ describe('validateQuery', () => {
 
     test('allows short words in exact mode, where they are part of a phrase', () => {
         assert.equal(validateQuery('a b cdef', ['a', 'b', 'cdef'], ALL_FIELDS), null);
+    });
+
+    test('allows short words in all-words mode, where they only narrow', () => {
+        // "war of the worlds" is a reasonable all-words query; ORed it would be junk
+        assert.equal(validateQuery('war of the worlds', ['war', 'of', 'the', 'worlds'], ALL_WORDS), null);
+    });
+
+    test('still enforces the overall minimum length in all-words mode', () => {
+        assert.ok(validateQuery('ab', ['ab'], ALL_WORDS));
     });
 
     test('MIN_SEARCH_LENGTH is the documented 3', () => {

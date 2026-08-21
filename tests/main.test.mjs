@@ -113,6 +113,25 @@ describe('searching', () => {
         assert.deepEqual(app.cardTitles(), ['Antinatalism']);
     });
 
+    test('all-words mode requires every word, across fields', () => {
+        // every video has "discussion"; only one also has "antinatalism"
+        app.search('discussion antinatalism', { mode: 'all' });
+        assert.deepEqual(app.cardTitles(), ['Antinatalism']);
+    });
+
+    test('all-words mode is narrower than any-word mode', () => {
+        app.search('discussion antinatalism', { mode: 'any' });
+        assert.equal(app.cards().length, 3);
+
+        app.search('discussion antinatalism', { mode: 'all' });
+        assert.equal(app.cards().length, 1);
+    });
+
+    test('all-words mode finds nothing when one word is absent', () => {
+        app.search('discussion zebra', { mode: 'all' });
+        assert.equal(app.cards().length, 0);
+    });
+
     test('reports the number of results', () => {
         app.search('discussion');
         assert.equal(app.$('#result-count').textContent, 'Found 3 result(s)');
@@ -125,12 +144,12 @@ describe('searching', () => {
     });
 
     test('exact mode requires the whole phrase', () => {
-        app.search('ecology antinatalism', { exact: true });
+        app.search('ecology antinatalism', { mode: 'exact' });
         assert.equal(app.cards().length, 0);
     });
 
     test('any-word mode matches either token', () => {
-        app.search('ecology antinatalism', { exact: false });
+        app.search('ecology antinatalism', { mode: 'any' });
         assert.equal(app.cards().length, 2);
     });
 
@@ -179,7 +198,7 @@ describe('searching', () => {
     });
 
     test('alerts when an any-word query contains a short word', () => {
-        app.search('ab ecology', { exact: false });
+        app.search('ab ecology', { mode: 'any' });
         assert.equal(app.alerts.length, 1);
         assert.match(app.alerts[0], /each word needs to be at least 3/);
     });

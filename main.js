@@ -93,7 +93,9 @@ function readOptions() {
         title: document.getElementById('titleCheckbox').checked,
         description: document.getElementById('descriptionCheckbox').checked,
         transcript: document.getElementById('transcriptCheckbox').checked,
-        isExact: selectedOption === 'exact',
+        // Matches the radio values in index.html: 'exact', 'any' or 'all'. The
+        // fallback mirrors the markup, where option1 carries the checked attribute.
+        mode: selectedOption ?? 'exact',
     };
 }
 
@@ -132,7 +134,7 @@ export function displayResults() {
     const endIndex = Math.min(startIndex + resultsPerPage, searchResults.length);
     const currentResults = searchResults.slice(startIndex, endIndex);
 
-    const highlightTokens = options.isExact ? [query] : queryTokens;
+    const highlightTokens = options.mode === 'exact' ? [query] : queryTokens;
 
     currentResults.forEach(video => {
         const videoElement = document.createElement('div');

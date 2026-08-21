@@ -53,14 +53,25 @@ export function searchableContent(video, options) {
     return content.toLowerCase();
 }
 
-/** Does one video match the query under the given options? */
+/**
+ * Does one video match the query under the given options?
+ *
+ * Three modes, which genuinely differ: 'exact' wants the phrase verbatim, 'all'
+ * wants every word somewhere in the content in any order, 'any' wants at least
+ * one. Matching is substring, not word-boundary, throughout -- "cat" matches
+ * "catastrophe" in every mode.
+ */
 export function matchesQuery(video, query, queryTokens, options) {
     const content = searchableContent(video, options);
 
-    if (options.isExact) {
-        return content.includes(query);
+    switch (options.mode) {
+        case 'exact':
+            return content.includes(query);
+        case 'all':
+            return queryTokens.every(token => content.includes(token));
+        default:
+            return queryTokens.some(token => content.includes(token));
     }
-    return queryTokens.some(token => content.includes(token));
 }
 
 /**
@@ -85,8 +96,11 @@ export function validateQuery(query, queryTokens, options) {
         return `Please enter at least ${MIN_SEARCH_LENGTH} characters for your search.`;
     }
 
-    if (!options.isExact) {
-        // A search for very short words would match nearly every video, and is slow.
+    // Only 'any' mode. A two-letter word ORed against everything else matches
+    // nearly every video, which is useless and slow. ANDed it is just a narrowing
+    // filter, so 'all' mode deliberately permits short words -- otherwise a
+    // perfectly reasonable query like "war of the worlds" would be rejected.
+    if (options.mode === 'any') {
         for (const token of queryTokens) {
             if (token.length < MIN_SEARCH_LENGTH) {
                 return `When "Contains any word..." option is selected, each word needs to be at least ${MIN_SEARCH_LENGTH} characters long.`;

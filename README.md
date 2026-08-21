@@ -22,7 +22,10 @@ natively — there is nothing to compile or bundle.
 
 `loadVideoData()` XHRs `videos.json` into a module-level array, then `searchVideos()`
 filters it with plain substring matching over whichever of
-title / description / transcript you've checked. There is no search index — it's a
+title / description / transcript you've checked, in one of three modes —
+`exact` (the phrase verbatim), `all` (every word, any order) or `any` (at least one
+word). Matching is substring rather than word-boundary in all three, so "cat"
+matches "catastrophe". There is no search index — it's a
 linear scan over every video on every query. At the current dataset size that's
 fast enough to feel instant.
 
@@ -453,8 +456,6 @@ You will see these locally but not in a fresh clone.
 - **Results are injected via `innerHTML` without escaping.** The data comes from the
   YouTube API rather than from users, so this is low risk in practice, but a video
   description containing markup will render as markup.
-- **The "contains any word" search is `.some()`** in `matchesQuery()`, despite an
-  early commit message calling it "all". There is no all-words option — see the todo.
 
 ## Todo
 
@@ -464,5 +465,5 @@ As of the last review, **none of these have been done**:
 - [ ] On initial load, show all videos in the results instead of an empty list.
 - [ ] Fix the progress bar on GitHub Pages (cause diagnosed above).
 - [ ] Fix results-per-page dropdown and pagination layout on small screens.
-- [ ] Add a "contains all words" mode — a third radio in `index.html` plus an
-      `.every()` branch alongside the existing `.some()`.
+- [x] Add a "contains all words" mode — done; `matchesQuery()` now switches on
+      `options.mode` (`'exact' | 'any' | 'all'`).

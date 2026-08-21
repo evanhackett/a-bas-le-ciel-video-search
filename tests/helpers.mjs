@@ -110,11 +110,13 @@ export async function loadApp() {
             FakeXHR.last.succeed(JSON.stringify(list));
         },
 
-        /** Set the search box and options, then run a search. */
-        search(text, { exact = true, title = true, description = true, transcript = true } = {}) {
+        /** Set the search box and options, then run a search.
+         *  mode is 'exact', 'any' or 'all', matching the radios in index.html. */
+        search(text, { mode = 'exact', title = true, description = true, transcript = true } = {}) {
             $('#search-input').value = text;
-            $('#option1').checked = exact;   // "contains exact search phrase"
-            $('#option2').checked = !exact;  // "contains any word"
+            $('#option1').checked = mode === 'exact';
+            $('#option2').checked = mode === 'any';
+            $('#option3').checked = mode === 'all';
             $('#titleCheckbox').checked = title;
             $('#descriptionCheckbox').checked = description;
             $('#transcriptCheckbox').checked = transcript;
