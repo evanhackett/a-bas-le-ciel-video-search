@@ -16,15 +16,15 @@
             <div class="column">
                 <div>
                     <input type="radio" id="option1" name="options" value="exact" checked>
-                    <label for="option1">Contains exact search phrase</label>
+                    <label for="option1">Contains <strong>exact</strong> search phrase</label>
                 </div>
                 <div>
                     <input type="radio" id="option2" name="options" value="any">
-                    <label for="option2">Contains any word in search phrase</label>
+                    <label for="option2">Contains <strong>any</strong> word in search phrase</label>
                 </div>
                 <div>
                     <input type="radio" id="option3" name="options" value="all">
-                    <label for="option3">Contains all words in search phrase</label>
+                    <label for="option3">Contains <strong>all</strong> words in search phrase</label>
                 </div>
             </div>
 
@@ -43,6 +43,9 @@
                 </div>
             </div>
         </form>
+        <p class="help-link">
+            <a href="help.html" target="_blank" rel="noopener">What do these options mean?</a>
+        </p>
     </div>
     <div id="progress-bar-container" style="display: none;">
         <div id="progress-bar"></div>

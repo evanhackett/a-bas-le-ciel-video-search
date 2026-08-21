@@ -15,6 +15,7 @@ natively — there is nothing to compile or bundle.
 | File | Role |
 | --- | --- |
 | `index.html` | Markup. Loads `main.js` as `<script type="module">`. |
+| `help.html` | Static explainer for the three search modes. No JS; shares `styles.css`. |
 | `search.js` | Pure logic: matching, tokenizing, date formatting, highlighting. No DOM. |
 | `main.js` | DOM: fetches `videos.json`, renders results, paginates, wires events. |
 | `styles.css` | All styling. |
@@ -25,7 +26,8 @@ filters it with plain substring matching over whichever of
 title / description / transcript you've checked, in one of three modes —
 `exact` (the phrase verbatim), `all` (every word, any order) or `any` (at least one
 word). Matching is substring rather than word-boundary in all three, so "cat"
-matches "catastrophe". There is no search index — it's a
+matches "catastrophe". `help.html` explains the difference for readers of the site;
+keep it in step when the matching rules change. There is no search index — it's a
 linear scan over every video on every query. At the current dataset size that's
 fast enough to feel instant.
 

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Search help — a-bas-le-ciel Video Search</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="help">
+        <h1>Search help</h1>
+
+        <p>
+            This site searches the full text of every video on the channel — including
+            the <strong>transcripts</strong>, which is the part YouTube's own search
+            will not do for you. The three options at the top of the search box decide
+            how your words are matched.
+        </p>
+
+        <h2>The three modes</h2>
+
+        <h3>Contains <strong>exact</strong> search phrase</h3>
+        <p>
+            Finds your words <em>together, in the order you typed them</em>. Searching
+            <code>the difference between</code> matches only videos where those three
+            words appear side by side, exactly like that.
+        </p>
+        <p class="when">
+            <strong>Use it when</strong> you remember the actual wording — a turn of
+            phrase, a name, a quote you want to find again. It is the narrowest option,
+            and the one most likely to return nothing if your memory of the phrasing is
+            slightly off.
+        </p>
+
+        <h3>Contains <strong>all</strong> words in search phrase</h3>
+        <p>
+            Finds videos containing <em>every one</em> of your words, anywhere, in any
+            order. Searching <code>antinatalism ecology</code> matches a video that
+            mentions antinatalism in the title and ecology halfway through the
+            transcript — the words never have to appear near each other.
+        </p>
+        <p class="when">
+            <strong>Use it when</strong> you are looking for a topic rather than a
+            phrase, and you want every word to count. This is usually the most useful
+            of the three for exploring.
+        </p>
+
+        <h3>Contains <strong>any</strong> word in search phrase</h3>
+        <p>
+            Finds videos containing <em>at least one</em> of your words. Searching
+            <code>antinatalism ecology</code> matches everything mentioning either term,
+            including videos with nothing to do with the other.
+        </p>
+        <p class="when">
+            <strong>Use it when</strong> you are unsure which word was used and want to
+            cast a wide net — for instance searching <code>vegan vegetarian</code> to
+            catch either. Expect a lot of results.
+        </p>
+
+        <h2>Side by side</h2>
+
+        <p>
+            The same search, <code>antinatalism ecology</code>, run three ways over the
+            current archive:
+        </p>
+
+        <table class="help-table">
+            <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th>Matches a video when…</th>
+                    <th>Roughly how many</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>exact</strong></td>
+                    <td>the phrase "antinatalism ecology" appears verbatim</td>
+                    <td>none — nobody says it that way</td>
+                </tr>
+                <tr>
+                    <td><strong>all</strong></td>
+                    <td>both "antinatalism" and "ecology" appear somewhere</td>
+                    <td>a handful</td>
+                </tr>
+                <tr>
+                    <td><strong>any</strong></td>
+                    <td>either "antinatalism" or "ecology" appears</td>
+                    <td>hundreds</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>
+            If a search returns nothing, widening the mode is usually the fix: exact →
+            all → any, in that order.
+        </p>
+
+        <h2>Where it searches</h2>
+
+        <p>
+            The three checkboxes — <strong>Title</strong>, <strong>Description</strong>
+            and <strong>Transcript</strong> — control which parts of each video are
+            looked at. All three are on by default.
+        </p>
+        <p>
+            Transcripts are by far the largest of the three, so turning that one off
+            narrows things dramatically. It is worth doing when a common word is
+            drowning you in results and you only care about videos whose <em>title</em>
+            is about the subject.
+        </p>
+
+        <h2>Worth knowing</h2>
+
+        <ul>
+            <li>
+                <strong>Matching is by substring, not whole words.</strong> Searching
+                <code>cat</code> also matches "catastrophe" and "education". This is
+                often useful — <code>natal</code> catches both "antinatalism" and
+                "natalist" — but it does mean short words match a great deal.
+            </li>
+            <li>
+                <strong>Searches need at least three characters.</strong> In
+                <strong>any</strong> mode every individual word must also be at least
+                three characters, because a two-letter word matched on its own would
+                return nearly the whole archive. <strong>All</strong> and
+                <strong>exact</strong> modes allow short words, since there they only
+                narrow the results — so <code>war of the worlds</code> is a fine
+                all-words search.
+            </li>
+            <li>
+                <strong>Capitalisation is ignored</strong> everywhere.
+            </li>
+            <li>
+                <strong>Your search terms are highlighted</strong> in the results. In
+                exact mode the whole phrase is highlighted; in the other two, each word
+                is highlighted wherever it appears.
+            </li>
+            <li>
+                <strong>Everything happens in your browser.</strong> The whole archive is
+                downloaded once when the page loads — which is why the first load takes a
+                moment — and every search after that runs locally, with nothing sent
+                anywhere.
+            </li>
+        </ul>
+
+        <p class="back-link"><a href="index.html">← Back to search</a></p>
+    </div>
+</body>
+
+</html>

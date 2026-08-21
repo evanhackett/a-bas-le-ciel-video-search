@@ -311,6 +311,30 @@ describe('pagination', () => {
     });
 });
 
+describe('help link', () => {
+    test('points at the help page', () => {
+        const link = app.$('.help-link a');
+        assert.ok(link, 'no help link in the search options');
+        assert.equal(link.getAttribute('href'), 'help.html');
+    });
+
+    test('opens in a new tab so the loaded dataset is not thrown away', () => {
+        // index.html holds the whole archive in memory; navigating away and back
+        // would re-download it.
+        const link = app.$('.help-link a');
+        assert.equal(link.getAttribute('target'), '_blank');
+        assert.match(link.getAttribute('rel') ?? '', /noopener/);
+    });
+
+    test('each mode label emphasises the word that distinguishes it', () => {
+        for (const [id, word] of [['option1', 'exact'], ['option2', 'any'], ['option3', 'all']]) {
+            const strong = app.$(`label[for="${id}"] strong`);
+            assert.ok(strong, `no <strong> in the ${id} label`);
+            assert.equal(strong.textContent, word);
+        }
+    });
+});
+
 describe('event wiring', () => {
     beforeEach(() => {
         app.deliverVideos(makeVideos(25));

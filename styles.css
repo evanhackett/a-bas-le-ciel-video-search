@@ -146,3 +146,63 @@ body {
     margin-top: 15px;
     margin-left: 10px;
 }
+
+/* Link from the search options through to help.html */
+.help-link {
+    margin: 12px 0 0;
+    font-size: 0.9em;
+}
+
+/* help.html. Shares this stylesheet with the search page, so the two match. */
+.help {
+    max-width: 700px;
+    margin: 0 auto;
+    line-height: 1.5;
+}
+.help h2 {
+    margin-top: 32px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #ddd;
+}
+.help h3 {
+    margin-top: 24px;
+    margin-bottom: 4px;
+}
+.help code {
+    background-color: #f3f3f3;
+    border: 1px solid #e3e3e3;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.95em;
+}
+.help .when {
+    margin-top: 4px;
+    color: #444;
+}
+.help li {
+    margin-bottom: 10px;
+}
+.help .back-link {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid #ddd;
+}
+
+/* The table can outgrow a phone, so let it scroll rather than push the page wide */
+.help-table {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+}
+.help-table th,
+.help-table td {
+    border: 1px solid #ccc;
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+.help-table th {
+    background-color: #f3f3f3;
+}
