@@ -171,8 +171,12 @@ export function updatePagination() {
     const totalPages = totalPageCount();
     const paginationTop = document.getElementById('pagination-top');
     const paginationBot = document.getElementById('pagination-bottom');
-    paginationTop.style.display = 'block';
-    paginationBot.style.display = totalPages > 1 ? 'block' : 'none';
+    // Clear the inline display rather than setting 'block'. Setting it overrode
+    // .pagination's own `display: flex` for the element's whole life, so
+    // justify-content and align-items never applied and the controls laid out as
+    // left-aligned inline content. Emptying the property lets the stylesheet win.
+    paginationTop.style.display = '';
+    paginationBot.style.display = totalPages > 1 ? '' : 'none';
 
     Array.from(document.getElementsByClassName('prev-button')).forEach(el => el.disabled = currentPage === 1);
     Array.from(document.getElementsByClassName('next-button')).forEach(el => el.disabled = currentPage === totalPages);

@@ -6,7 +6,9 @@ on initial load, show all videos in search results
 
 investigate why progress bar for loading json works on localhost but not on gh-pages.
 
-Fix "results per page" dropdown and pagination controls layout on mobile and small screens
+DONE: fixed the "results per page" dropdown and pagination layout on small screens.
+The row needed 490px against ~350px on a phone. Root cause was main.js forcing
+display:block on .pagination, which killed its own flex rules.
 
 DONE: added "contains all words". On "antinatalism ecology" the three modes give
 0 (exact), 483 (any) and 6 (all) results against the current dataset.

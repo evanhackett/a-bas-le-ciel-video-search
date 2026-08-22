@@ -451,10 +451,6 @@ You will see these locally but not in a fresh clone.
   agree and the bar is accurate. A real fix means an indeterminate bar once
   `loaded > total` proves the response is compressed; dividing by a hardcoded
   uncompressed size would need editing every time the dataset grows.
-- **Pagination overflows on narrow screens.** The `@media (max-width: 740px)` block
-  only restyles the result cards. `.pagination` stays `display: flex` with no
-  `flex-wrap`, so five buttons plus the page counter plus the results-per-page
-  `<select>` run off the edge of a phone.
 - **Results are injected via `innerHTML` without escaping.** The data comes from the
   YouTube API rather than from users, so this is low risk in practice, but a video
   description containing markup will render as markup.
@@ -466,6 +462,7 @@ As of the last review, **none of these have been done**:
 - [ ] Deploy script. Probably obsolete — deploying is just `git push`.
 - [ ] On initial load, show all videos in the results instead of an empty list.
 - [ ] Fix the progress bar on GitHub Pages (cause diagnosed above).
-- [ ] Fix results-per-page dropdown and pagination layout on small screens.
+- [x] Fix results-per-page dropdown and pagination layout on small screens — done;
+      the media query now wraps the row into counter / buttons / select.
 - [x] Add a "contains all words" mode — done; `matchesQuery()` now switches on
       `options.mode` (`'exact' | 'any' | 'all'`).

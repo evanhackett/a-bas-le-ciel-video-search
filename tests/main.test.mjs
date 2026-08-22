@@ -218,8 +218,10 @@ describe('pagination', () => {
     });
 
     test('shows the pagination controls', () => {
-        assert.equal(app.$('#pagination-top').style.display, 'block');
-        assert.equal(app.$('#pagination-bottom').style.display, 'block');
+        // Empty, not 'block': an inline display would override .pagination's
+        // `display: flex` and with it the centring and the small-screen wrapping.
+        assert.equal(app.$('#pagination-top').style.display, '');
+        assert.equal(app.$('#pagination-bottom').style.display, '');
     });
 
     test('disables first/previous on the opening page', () => {

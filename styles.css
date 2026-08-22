@@ -69,6 +69,31 @@ body {
     .result-right {
         max-height: 350px;
     }
+
+    /* The pagination row wants 490px laid out in a line -- four buttons, the page
+       counter and the per-page select -- against the ~350px a phone offers once
+       body margins are taken off. It used to run straight off the edge, because
+       nothing here mentioned .pagination and it stayed nowrap.
+
+       Rather than let it wrap raggedly, each part gets its own place: the counter
+       on top, the four buttons sharing one row, the select full width beneath. */
+    .pagination {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .pagination button {
+        margin: 0;          /* gap does the spacing now; the 20px margins were half the problem */
+        flex: 1 1 auto;     /* share the row evenly instead of leaving a ragged tail */
+    }
+    .pagination .page-info {
+        order: -1;          /* above the buttons rather than wedged between them */
+        flex-basis: 100%;
+        text-align: center;
+    }
+    .pagination #results-per-page {
+        flex-basis: 100%;   /* its own row, full width, comfortable to tap */
+        padding: 8px;
+    }
 }
 
 .search-bar {
