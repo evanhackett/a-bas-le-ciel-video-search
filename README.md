@@ -468,22 +468,4 @@ You will see these locally but not in a fresh clone.
 - **`sample.json`** — a hand-truncated subset, presumably for testing against
   something smaller than 52 MB. **It is invalid JSON** (trailing comma near line 622)
   and nothing references it.
-- **`todo.txt`** — a scratch todo list, kept local. Its contents are mirrored in
-  the [Todo](#todo) section below.
 
-## Known issues
-
-
-## Todo
-
-As of the last review, **none of these have been done**:
-
-- [ ] Deploy script. Probably obsolete — deploying is just `git push`.
-- [x] On initial load, show all videos in the results instead of an empty list —
-      done; `showAllVideos()` runs once the dataset lands.
-- [x] Fix the progress bar on GitHub Pages — done; it measures against
-      `EXPECTED_BYTES` rather than the compressed `Content-Length`.
-- [x] Fix results-per-page dropdown and pagination layout on small screens — done;
-      the media query now wraps the row into counter / buttons / select.
-- [x] Add a "contains all words" mode — done; `matchesQuery()` now switches on
-      `options.mode` (`'exact' | 'any' | 'all'`).
