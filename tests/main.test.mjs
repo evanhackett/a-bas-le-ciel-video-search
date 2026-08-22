@@ -5,10 +5,7 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, statSync } from 'node:fs';
 
-import { loadApp, FakeXHR, makeVideo, makeVideos } from './helpers.mjs';
-
-/** Let pending promise callbacks (the loadVideoData catch chain) run. */
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+import { loadApp, FakeXHR, makeVideo, makeVideos, tick } from './helpers.mjs';
 
 let app;
 
@@ -31,13 +28,13 @@ describe('loading the dataset', () => {
         assert.equal(app.$('#search-container').style.display, 'none');
     });
 
-    test('reveals the search UI once data arrives', () => {
-        app.deliverVideos(makeVideos(2));
+    test('reveals the search UI once data arrives', async () => {
+        await app.deliverVideos(makeVideos(2));
         assert.equal(app.$('#search-container').style.display, 'block');
     });
 
-    test('hides the progress bar when the load finishes', () => {
-        app.deliverVideos(makeVideos(2));
+    test('hides the progress bar when the load finishes', async () => {
+        await app.deliverVideos(makeVideos(2));
         assert.equal(app.$('#progress-bar-container').style.display, 'none');
     });
 
@@ -119,9 +116,150 @@ describe('load progress bar', () => {
     });
 });
 
+describe('the archive cache', () => {
+    // What version.json holds. `count` has to match the fixture, or main.js
+    // refuses the write -- that refusal is itself tested below.
+    const META = { version: 'abc123', bytes: 4096, count: 3 };
+    const ARCHIVE = makeVideos(3);
+
+    /** Replace the app the outer beforeEach built with one configured here. */
+    async function reload(options) {
+        app.cleanup();
+        app = await loadApp(options);
+        return app;
+    }
+
+    describe('on a repeat visit', () => {
+        beforeEach(async () => {
+            await reload({ versionMeta: META, cached: ARCHIVE });
+        });
+
+        test('renders from the cache without downloading the archive', () => {
+            assert.equal(FakeXHR.instances.length, 0, 'videos.json was requested anyway');
+            assert.equal(app.$('#search-container').style.display, 'block');
+            assert.equal(app.cards().length, 3);
+        });
+
+        test('never shows the progress bar, since nothing is downloading', () => {
+            assert.equal(app.$('#progress-bar-container').style.display, 'none');
+            assert.equal(app.$('#progress-text').textContent, '');
+        });
+
+        test('still checks the fingerprint, and forces it to revalidate', () => {
+            const request = app.fetched.find((f) => String(f.url).endsWith('version.json'));
+            assert.ok(request, 'version.json was not fetched');
+            // Without this the 600-second max-age would let a stale fingerprint
+            // send the visitor to a cache entry for a dataset since replaced.
+            assert.equal(request.options?.cache, 'no-cache');
+        });
+
+        test('the cached archive is searchable like any other', () => {
+            app.search('Video 2');
+            assert.deepEqual(app.cardTitles(), ['Video 2']);
+        });
+    });
+
+    describe('on a first visit', () => {
+        beforeEach(async () => {
+            await reload({ versionMeta: META });
+        });
+
+        test('downloads the archive when the version is not cached', () => {
+            assert.equal(FakeXHR.last.url, 'videos.json');
+        });
+
+        test('stores the archive under the fingerprint', async () => {
+            await app.deliverVideos(ARCHIVE);
+
+            assert.deepEqual(app.idb.keys('datasets'), [META.version]);
+            assert.equal(app.idb.dump('datasets')[META.version].length, 3);
+        });
+
+        test('measures progress against the size version.json reports', () => {
+            FakeXHR.last.progress(META.bytes / 2, 0);
+            assert.equal(app.$('#progress-bar').style.width, '50%');
+        });
+    });
+
+    test('evicts the previous dataset rather than stacking copies', async () => {
+        await reload({ versionMeta: META, cached: ARCHIVE });
+        // A new dataset ships: same browser, new fingerprint.
+        app.idb.stores.get('datasets').set('older-version', makeVideos(2));
+
+        await reload({ versionMeta: { ...META, version: 'def456' } });
+        await app.deliverVideos(ARCHIVE);
+
+        assert.deepEqual(app.idb.keys('datasets'), ['def456']);
+    });
+
+    // The CDN skew this guards against is real: version.json and videos.json are
+    // independent objects with independent 600-second lifetimes, so a visitor
+    // arriving mid-deploy can get the new fingerprint with the old archive.
+    test('refuses to cache a download that disagrees with the fingerprint', async () => {
+        await reload({ versionMeta: META });
+        await app.deliverVideos(makeVideos(2));   // META.count says 3
+
+        assert.deepEqual(app.idb.keys('datasets'), [], 'a torn pair was cached');
+        // The visitor still gets a working page out of it.
+        assert.equal(app.cards().length, 2);
+    });
+
+    describe('when the cache is unusable', () => {
+        test('a browser without IndexedDB still loads the archive', async () => {
+            await reload({ versionMeta: META, failOpen: true });
+            await app.deliverVideos(ARCHIVE);
+
+            assert.equal(app.cards().length, 3);
+            assert.ok(app.warnings.some((w) => /read failed/.test(w)));
+        });
+
+        test('a failed write leaves the page working', async () => {
+            await reload({ versionMeta: META, failWrites: true });
+            await app.deliverVideos(ARCHIVE);
+
+            assert.equal(app.cards().length, 3);
+            assert.deepEqual(app.idb.keys('datasets'), []);
+            assert.ok(app.warnings.some((w) => /write failed/.test(w)));
+        });
+
+        test('a missing version.json falls back to a plain download', async () => {
+            // The default: loadApp() serves version.json as a 404, which is the
+            // state of a checkout where write-version.py has not been run.
+            await reload({});
+            await app.deliverVideos(ARCHIVE);
+
+            assert.equal(app.cards().length, 3);
+            assert.deepEqual(app.idb.keys('datasets'), [], 'cached without a fingerprint');
+            assert.ok(app.warnings.some((w) => /version check failed/.test(w)));
+        });
+
+        test('an HTTP error still reports failure rather than a stale render', async () => {
+            await reload({ versionMeta: META });
+            FakeXHR.last.httpError(500);
+            await tick();
+
+            assert.match(app.document.body.firstChild.textContent, /Failed to load video data/);
+            assert.equal(app.$('#search-container').style.display, 'none');
+        });
+    });
+
+    test('version.json on disk describes the shipped videos.json', () => {
+        // write-version.py has to be re-run after every promotion; forgetting
+        // means every visitor re-downloads on every deploy, silently.
+        const meta = JSON.parse(readFileSync(new URL('../version.json', import.meta.url), 'utf8'));
+        const actual = statSync(new URL('../videos.json', import.meta.url)).size;
+
+        assert.equal(
+            meta.bytes, actual,
+            `version.json is stale (says ${meta.bytes} bytes, videos.json is ${actual})`
+            + ' -- run: python3 write-version.py',
+        );
+    });
+});
+
 describe('searching', () => {
-    beforeEach(() => {
-        app.deliverVideos([
+    beforeEach(async () => {
+        await app.deliverVideos([
             makeVideo({ id: 'a', title: 'Antinatalism', description: 'a discussion of ethics', transcript: 'spoken words' }),
             makeVideo({ id: 'b', title: 'Chromebook', description: 'a discussion of hardware', transcript: 'other words' }),
             makeVideo({ id: 'c', title: 'Ecology', description: 'a discussion of nature', transcript: 'green things' }),
@@ -232,8 +370,8 @@ describe('searching', () => {
 
 describe('pagination', () => {
     // 25 videos titled "Video 1".."Video 25"; searching "video" matches all of them.
-    beforeEach(() => {
-        app.deliverVideos(makeVideos(25));
+    beforeEach(async () => {
+        await app.deliverVideos(makeVideos(25));
         app.search('video');
     });
 
@@ -358,13 +496,13 @@ describe('static page markup', () => {
 });
 
 describe('the landing state', () => {
-    test('renders the archive without anyone searching', () => {
-        app.deliverVideos(makeVideos(25));
+    test('renders the archive without anyone searching', async () => {
+        await app.deliverVideos(makeVideos(25));
         assert.equal(app.cards().length, 10);   // one page of it
     });
 
-    test('keeps the order the dataset is in, which is newest first', () => {
-        app.deliverVideos([
+    test('keeps the order the dataset is in, which is newest first', async () => {
+        await app.deliverVideos([
             makeVideo({ id: 'new', title: 'Newest', upload_date: '20260101000000' }),
             makeVideo({ id: 'mid', title: 'Middle', upload_date: '20250101000000' }),
             makeVideo({ id: 'old', title: 'Oldest', upload_date: '20240101000000' }),
@@ -373,26 +511,26 @@ describe('the landing state', () => {
         assert.deepEqual(app.cardTitles(), ['Newest', 'Middle', 'Oldest']);
     });
 
-    test('says what is being shown rather than claiming a search found it', () => {
-        app.deliverVideos(makeVideos(25));
+    test('says what is being shown rather than claiming a search found it', async () => {
+        await app.deliverVideos(makeVideos(25));
 
         const text = app.$('#result-count').textContent;
         assert.match(text, /Showing all 25 videos/);
         assert.doesNotMatch(text, /Found/);
     });
 
-    test('highlights nothing, because nothing has been searched for', () => {
-        app.deliverVideos(makeVideos(3));
+    test('highlights nothing, because nothing has been searched for', async () => {
+        await app.deliverVideos(makeVideos(3));
         assert.equal(app.$$('#results .highlight').length, 0);
     });
 
-    test('paginates the whole archive', () => {
-        app.deliverVideos(makeVideos(25));
+    test('paginates the whole archive', async () => {
+        await app.deliverVideos(makeVideos(25));
         assert.equal(app.pageInfo(), 'Page 1 of 3');
     });
 
-    test('a search then narrows it', () => {
-        app.deliverVideos(makeVideos(25));
+    test('a search then narrows it', async () => {
+        await app.deliverVideos(makeVideos(25));
         assert.equal(app.cards().length, 10);
 
         app.search('Video 3');
@@ -416,8 +554,8 @@ describe('the landing state', () => {
 });
 
 describe('an empty search', () => {
-    beforeEach(() => {
-        app.deliverVideos(makeVideos(25));
+    beforeEach(async () => {
+        await app.deliverVideos(makeVideos(25));
     });
 
     test('shows the whole archive instead of complaining', () => {
@@ -464,65 +602,65 @@ describe('an empty search', () => {
 });
 
 describe('escaping in rendered cards', () => {
-    const render = (overrides) => {
-        app.deliverVideos([makeVideo({ title: 'Ecology', ...overrides })]);
+    const render = async (overrides) => {
+        await app.deliverVideos([makeVideo({ title: 'Ecology', ...overrides })]);
         app.search('Ecology');
     };
 
-    test('markup in a title arrives as text, not as elements', () => {
-        render({ title: 'Ecology <img src=x onerror="boom()">' });
+    test('markup in a title arrives as text, not as elements', async () => {
+        await render({ title: 'Ecology <img src=x onerror="boom()">' });
 
         assert.equal(app.$$('#results .result-left h3 img').length, 0);
         assert.match(app.cardTitles()[0], /<img src=x onerror="boom\(\)">/);
     });
 
-    test('markup in a transcript arrives as text', () => {
-        render({ transcript: 'Ecology <script>boom()</script>' });
+    test('markup in a transcript arrives as text', async () => {
+        await render({ transcript: 'Ecology <script>boom()</script>' });
 
         assert.equal(app.$$('#results .result-right script').length, 0);
         assert.match(app.$('#results .result-right p').textContent, /<script>/);
     });
 
-    test('a quote in an attribute cannot break out of it', () => {
-        render({ thumbnail: 'x" onerror="boom()' });
+    test('a quote in an attribute cannot break out of it', async () => {
+        await render({ thumbnail: 'x" onerror="boom()' });
 
         const img = app.$('#results .result-left img');
         assert.equal(img.getAttribute('onerror'), null);
         assert.equal(img.getAttribute('src'), 'x" onerror="boom()');
     });
 
-    test('the link href is escaped but still usable', () => {
-        render({ url: 'https://youtu.be/a?b=1&c=2' });
+    test('the link href is escaped but still usable', async () => {
+        await render({ url: 'https://youtu.be/a?b=1&c=2' });
 
         assert.equal(app.$('#results .result-left a').getAttribute('href'),
                      'https://youtu.be/a?b=1&c=2');
     });
 
-    test('a newline becomes one line break, not two', () => {
+    test('a newline becomes one line break, not two', async () => {
         // Descriptions put consecutive URLs on their own lines separated by a
         // single newline; doubling dropped a blank line between them.
-        render({ description: 'first line\nsecond line' });
+        await render({ description: 'first line\nsecond line' });
 
         const paragraphs = app.$$('#results .result-left p');
         assert.match(paragraphs[1].innerHTML, /first line<br>second line/);
     });
 
-    test('a blank line still reads as a paragraph gap', () => {
-        render({ description: 'first para\n\nsecond para' });
+    test('a blank line still reads as a paragraph gap', async () => {
+        await render({ description: 'first para\n\nsecond para' });
 
         const paragraphs = app.$$('#results .result-left p');
         assert.match(paragraphs[1].innerHTML, /first para<br><br>second para/);
     });
 
-    test('highlighting still works on ordinary text', () => {
-        render({});
+    test('highlighting still works on ordinary text', async () => {
+        await render({});
         assert.equal(app.$$('#results .result-left h3 .highlight').length, 1);
     });
 });
 
 describe('search progress', () => {
-    beforeEach(() => {
-        app.deliverVideos(makeVideos(5));
+    beforeEach(async () => {
+        await app.deliverVideos(makeVideos(5));
     });
 
     test('clears the byte readout, which means nothing for a search', () => {
@@ -561,8 +699,8 @@ describe('help link', () => {
 });
 
 describe('event wiring', () => {
-    beforeEach(() => {
-        app.deliverVideos(makeVideos(25));
+    beforeEach(async () => {
+        await app.deliverVideos(makeVideos(25));
     });
 
     test('the search button runs a search', () => {

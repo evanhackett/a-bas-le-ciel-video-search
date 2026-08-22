@@ -17,9 +17,11 @@ natively — there is nothing to compile or bundle.
 | `index.html` | Markup. Loads `main.js` as `<script type="module">`. |
 | `help.html` | Static explainer for the three search modes. No JS; shares `styles.css`. |
 | `search.js` | Pure logic: matching, tokenizing, date formatting, highlighting. No DOM. |
-| `main.js` | DOM: fetches `videos.json`, renders results, paginates, wires events. |
+| `main.js` | DOM: loads `videos.json`, renders results, paginates, wires events. |
+| `idb-cache.js` | Keeps a copy of the parsed archive in IndexedDB so repeat visits skip the download. |
 | `styles.css` | All styling. |
 | `videos.json` | **The dataset.** ~53 MB, one object per video. |
+| `version.json` | Fingerprint of `videos.json`. Written by `write-version.py`; the cache key. |
 
 Once the dataset lands, `showAllVideos()` renders the whole archive as the landing
 state, newest first. Searching with an empty box returns to it, which is why
@@ -52,20 +54,68 @@ The split exists so the matching logic can be tested without a browser. Keep
 `main.js`. Event handlers are attached in `wireEvents()` — do not add inline
 `onclick` attributes, as module scope is not global and they will not resolve.
 
+### Why repeat visits don't re-download the archive
+
+GitHub Pages sends `videos.json` with `cache-control: max-age=600` and an ETag
+built from the file's mtime and size — measured with `curl`:
+
+```
+cache-control: max-age=600
+etag: W/"6a89e64a-351c0d6"     # 0x6a89e64a = mtime, 0x351c0d6 = 55689430 bytes
+```
+
+Inside ten minutes the browser serves it from disk with no request. After that it
+revalidates and gets a 304 with an empty body, which is cheap. **The problem is
+deploys.** Pages re-checks-out the whole repo every time you push, so every file
+gets a fresh mtime — `videos.json`, `main.js` and `index.html` all reported the
+same `last-modified` after a commit that touched only `help.html`. That new ETag
+makes a 304 impossible, and every returning visitor downloads 19 MB (gzipped)
+again for a file that did not change.
+
+So the cache key is the content, not the deploy. `write-version.py` writes
+`version.json`:
+
+```json
+{"version": "630567c5e6113b3e", "bytes": 55689430, "count": 3118}
+```
+
+`loadVideoData()` fetches that first — with `cache: 'no-cache'`, so it revalidates
+rather than honouring the 600-second window — and looks for `version` in
+IndexedDB. A hit renders immediately with no download and no progress bar. A miss
+downloads as before and stores the result under the new key, evicting the old one.
+
+Two things keep it honest:
+
+- **The archive is only cached if `data.length` matches `count`.** `version.json`
+  and `videos.json` are independent CDN objects with independent lifetimes, so a
+  visitor arriving mid-deploy can be served a new fingerprint alongside a stale
+  archive. Caching that pairing would pin the wrong data under the new key until
+  the *next* dataset shipped.
+- **Every cache failure degrades to a plain download.** IndexedDB is missing in
+  some private windows and will refuse a 55 MB write against a tight quota. Both
+  paths in `idb-cache.js` swallow their errors and report "not cached".
+
+A missing `version.json` — the state of a fresh checkout — disables caching and
+changes nothing else, which is why the site still works served from any directory.
+
 ### Why the progress bar uses a constant
 
-`loadVideoData()` sizes the bar against `EXPECTED_BYTES` in `main.js`, not against
-`event.total`. GitHub Pages serves `videos.json` gzipped, so `event.total` is the
+`downloadArchive()` sizes the bar against `version.json`'s `bytes`, falling back to
+`EXPECTED_BYTES` in `main.js` when there is no fingerprint. Neither is
+`event.total`, and that is the point: GitHub Pages serves `videos.json` gzipped, so
+`event.total` is the
 compressed length while `event.loaded` counts decompressed bytes — verified with
 `curl`, which reports `content-encoding: gzip` and `content-length: 17969259`
 against 52258072 uncompressed. Measuring one against the other reaches 100% about a
 third of the way through the download. No response header carries the uncompressed
 size.
 
-The constant is the same number in both environments, which is why it works on
+A byte count is the same number in both environments, which is why it works on
 Pages and on a local server alike. **When `videos.json` grows, a test fails and
 tells you the value to paste in** — that guard is what makes hardcoding a size safe
-rather than a slow leak. The tolerance is 5%.
+rather than a slow leak. The tolerance is 5%. A second test checks `version.json`
+against the real file with no tolerance at all, since a stale fingerprint is a
+correctness problem rather than a cosmetic one.
 
 **Previewing locally needs a web server.** ES modules are blocked over `file://`,
 so opening `index.html` by double-clicking will not work:
@@ -119,9 +169,22 @@ venv/bin/pip install -r requirements-dev.txt   # Python test deps (pytest)
 | `tests/test_get_video_data.py` | `get-video-data.py`: key loading, dedupe, API parsing, the merge. |
 | `tests/test_data_integrity.py` | The shipped `videos.json` itself. |
 
-`tests/helpers.mjs` builds a fresh window per test and swaps in a `FakeXHR`, so no
-test touches the network. Because `main.js` holds module-level state, each test
-re-imports it under a cache-busting query string for isolation.
+`tests/helpers.mjs` builds a fresh window per test and swaps in a `FakeXHR`, a stub
+`fetch` and a fake `indexedDB`, so no test touches the network or the disk. Because
+`main.js` holds module-level state, each test re-imports it under a cache-busting
+query string for isolation.
+
+**`deliverVideos()` must be awaited.** The load is a promise chain now — the
+fingerprint check, then the cache lookup, then the download — so a response no
+longer renders inside the call that delivers it.
+
+`tests/fake-indexeddb.mjs` is a hand-rolled stand-in, written rather than installed
+to keep the dependency list at one. It models the parts the cache leans on:
+asynchronous callbacks, requests issued from inside another request's `onsuccess`
+joining the same transaction, readwrite transactions staging their writes until
+commit, and structured cloning on the way in and out. **It is a model, not the real
+thing** — it will catch a logic error in `idb-cache.js` but not a misreading of the
+spec, so check real-browser behaviour before trusting it on anything subtle.
 
 Tests can be marked `todo`: they describe behaviour that is known to be wrong and
 are reported without failing the run, then flip to passing when the bug is fixed.
@@ -331,14 +394,21 @@ python get-video-data.py --proxy --check
 ### The manual step that is easy to forget
 
 **The script writes `updated_videos.json`, not `videos.json`.** You have to promote
-it yourself:
+it yourself, and re-fingerprint it in the same breath:
 
 ```bash
 mv updated_videos.json videos.json
-git add videos.json
+python3 write-version.py
+git add videos.json version.json
 git commit -m "Update videos.json"
 git push
 ```
+
+Skipping `write-version.py` does not break the site — it makes every returning
+visitor's cached copy look current while the archive underneath has moved on, so
+they keep searching the old dataset until the fingerprint changes. `npm test`
+fails when `version.json` and `videos.json` disagree, so the mistake surfaces
+before the push rather than after.
 
 To check whether a past run was ever promoted: if `videos.json` and
 `updated_videos.json` have the same hash, it was.

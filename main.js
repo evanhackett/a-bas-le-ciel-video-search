@@ -10,6 +10,8 @@ import {
     validateQuery,
 } from './search.js';
 
+import { idbGet, idbPut } from './idb-cache.js';
+
 let videos = [];
 let currentPage = 1;
 let resultsPerPage = 10;
@@ -21,7 +23,8 @@ let queryTokens = [];
 let options;
 
 /**
- * Uncompressed size of videos.json, in bytes.
+ * Uncompressed size of videos.json, in bytes. Only a fallback now: version.json
+ * carries the real figure, and this stands in when that file cannot be read.
  *
  * The progress bar cannot use event.total. GitHub Pages serves videos.json
  * gzipped, so total is the compressed length (~17.9 MB) while event.loaded counts
@@ -40,7 +43,31 @@ function formatMegabytes(bytes) {
     return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-export function loadVideoData() {
+/**
+ * Read the dataset fingerprint: { version, bytes, count }.
+ *
+ * `cache: 'no-cache'` forces a revalidation rather than honouring the
+ * max-age=600 GitHub Pages sets. Being current is the entire value of this
+ * file -- a stale copy would send a visitor to a cache entry for a dataset
+ * that has since been replaced -- and on a response this small currency costs
+ * one 304.
+ *
+ * Throws if the file is missing or unreadable, which is the normal case on a
+ * checkout where write-version.py has not been run.
+ */
+async function fetchVersion() {
+    const response = await fetch('version.json', { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`version.json: HTTP ${response.status}`);
+    return response.json();
+}
+
+/**
+ * Download and parse videos.json, driving the progress bar.
+ *
+ * `expectedBytes` is the uncompressed size to measure progress against; see
+ * EXPECTED_BYTES for why the server's own numbers cannot be used.
+ */
+function downloadArchive(expectedBytes) {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         const progressBarContainer = document.getElementById('progress-bar-container');
@@ -50,15 +77,15 @@ export function loadVideoData() {
         xhr.open('GET', 'videos.json', true);
 
         xhr.onprogress = function(event) {
-            // Measured against EXPECTED_BYTES rather than event.total; see above.
-            // Capped because the dataset grows between updates of that constant.
-            const percentComplete = Math.min(100, (event.loaded / EXPECTED_BYTES) * 100);
+            // Measured against expectedBytes rather than event.total; see above.
+            // Capped because the fallback constant drifts as the dataset grows.
+            const percentComplete = Math.min(100, (event.loaded / expectedBytes) * 100);
             progressBar.style.width = `${percentComplete}%`;
 
-            // Always true even if the constant has drifted, and it gives a sense of
+            // Always true even if the figure has drifted, and it gives a sense of
             // scale on a slow connection
             progressText.textContent =
-                `${formatMegabytes(event.loaded)} of ${formatMegabytes(EXPECTED_BYTES)}`;
+                `${formatMegabytes(event.loaded)} of ${formatMegabytes(expectedBytes)}`;
             progressBarContainer.style.display = 'block';
             // No lengthComputable guard: nothing here reads event.total, so progress
             // still shows for a response that arrives without a Content-Length.
@@ -68,14 +95,7 @@ export function loadVideoData() {
             progressBarContainer.style.display = 'none';
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
-                    const data = JSON.parse(xhr.responseText);
-                    videos = data;
-                    document.getElementById('search-container').style.display = 'block';
-                    // Only on success: loadVideoData()'s catch swallows failures and
-                    // resolves, so chaining this onto the promise would render an
-                    // empty archive as though it were the real one.
-                    showAllVideos();
-                    resolve();
+                    resolve(JSON.parse(xhr.responseText));
                 } catch (error) {
                     reject('Failed to parse JSON response');
                 }
@@ -90,10 +110,57 @@ export function loadVideoData() {
         };
 
         xhr.send();
-    }).catch(error => {
+    });
+}
+
+/** Hand the archive to the page. Only ever called with data we actually have. */
+function renderArchive(data) {
+    videos = data;
+    document.getElementById('search-container').style.display = 'block';
+    // Only on success: loadVideoData() swallows failures, so rendering from its
+    // tail would show an empty archive as though it were the real one.
+    showAllVideos();
+}
+
+export async function loadVideoData() {
+    // Null whenever the fingerprint could not be read, which disables caching
+    // for this load without disabling the site.
+    let meta = null;
+
+    try {
+        meta = await fetchVersion();
+        const cached = await idbGet(meta.version);
+        if (cached) {
+            // No progress bar: there is no download to report on.
+            renderArchive(cached);
+            return;
+        }
+    } catch (error) {
+        console.warn('archive cache: version check failed, downloading', error);
+    }
+
+    let data;
+    try {
+        data = await downloadArchive(meta?.bytes ?? EXPECTED_BYTES);
+    } catch (error) {
         console.error('Error loading video data:', error);
         showError('Failed to load video data. Please try again later.');
-    });
+        return;
+    }
+
+    renderArchive(data);
+
+    // Cache only what we can prove matches the fingerprint we fetched. The two
+    // files are independent CDN objects with independent lifetimes, so a
+    // visitor arriving mid-deploy can get a fresh version.json alongside a
+    // stale videos.json; storing that pairing would pin the wrong data under
+    // the new key until the *next* dataset ships. A mismatch just means this
+    // load goes uncached and the next visit tries again.
+    if (meta && data.length === meta.count) {
+        // Deliberately not awaited: the page is already usable, and a slow
+        // 55 MB write should not hold up the promise init() returns.
+        idbPut(meta.version, data);
+    }
 }
 
 export function showError(message) {
