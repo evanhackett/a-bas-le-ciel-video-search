@@ -415,6 +415,54 @@ describe('the landing state', () => {
     });
 });
 
+describe('an empty search', () => {
+    beforeEach(() => {
+        app.deliverVideos(makeVideos(25));
+    });
+
+    test('shows the whole archive instead of complaining', () => {
+        app.search('Video 3');
+        assert.ok(app.cards().length < 10);
+
+        app.search('');
+
+        assert.equal(app.alerts.length, 0);
+        assert.equal(app.cards().length, 10);
+        assert.match(app.$('#result-count').textContent, /Showing all 25 videos/);
+    });
+
+    test('whitespace alone counts as empty', () => {
+        app.search('   ');
+
+        assert.equal(app.alerts.length, 0);
+        assert.equal(app.cards().length, 10);
+    });
+
+    test('returns to page 1 of the whole archive', () => {
+        app.app.lastPage();
+        app.search('');
+
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+    });
+
+    test('highlights nothing, since there is nothing to highlight', () => {
+        app.search('Video');
+        assert.ok(app.$$('#results .highlight').length > 0);
+
+        app.search('');
+        assert.equal(app.$$('#results .highlight').length, 0);
+    });
+
+    test('a query that is short but not empty is still refused', () => {
+        // The three-character rule still means something; "" is simply not a
+        // short search, it is no search.
+        app.search('ab');
+
+        assert.equal(app.alerts.length, 1);
+        assert.match(app.alerts[0], /at least 3 characters/);
+    });
+});
+
 describe('escaping in rendered cards', () => {
     const render = (overrides) => {
         app.deliverVideos([makeVideo({ title: 'Ecology', ...overrides })]);

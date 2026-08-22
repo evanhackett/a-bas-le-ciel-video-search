@@ -158,6 +158,16 @@ export function searchVideos() {
     options = readOptions();
     queryTokens = tokenize(query);
 
+    // An empty box is not a search too short to run, it is the absence of a
+    // search, and the answer to that is the whole archive -- the same thing the
+    // page opens on. Refusing it with "at least 3 characters" treated clearing the
+    // box as a mistake when it is the obvious way to get back to everything.
+    // Whitespace-only counts as empty; query is already trimmed.
+    if (query === '') {
+        showAllVideos();
+        return;
+    }
+
     const problem = validateQuery(query, queryTokens, options);
     if (problem) {
         alert(problem);

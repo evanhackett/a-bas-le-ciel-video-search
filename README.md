@@ -22,7 +22,9 @@ natively — there is nothing to compile or bundle.
 | `videos.json` | **The dataset.** ~53 MB, one object per video. |
 
 Once the dataset lands, `showAllVideos()` renders the whole archive as the landing
-state, newest first. It does no sorting: `get-video-data.py` writes `videos.json`
+state, newest first. Searching with an empty box returns to it, which is why
+`searchVideos()` checks for an empty query before `validateQuery()` — an empty box
+is the absence of a search rather than a search too short to run. It does no sorting: `get-video-data.py` writes `videos.json`
 reverse-chronologically and `test_records_are_sorted_newest_first` holds it there,
 so file order is display order. Only the current page is rendered, so the cost does
 not grow with the archive.
