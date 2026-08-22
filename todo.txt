@@ -1,20 +1,5 @@
 todo
 
-deploy script to server
-
-DONE: on initial load the whole archive shows, newest first, paginated as usual.
-
-DONE: gh-pages serves videos.json gzipped, so event.total was the compressed size
-(17.9MB) while event.loaded counted decompressed bytes (53MB) - the bar hit 100% a
-third of the way in. Now measured against EXPECTED_BYTES in main.js, guarded by a test.
-
-DONE: fixed the "results per page" dropdown and pagination layout on small screens.
-The row needed 490px against ~350px on a phone. Root cause was main.js forcing
-display:block on .pagination, which killed its own flex rules.
-
-DONE: added "contains all words". On "antinatalism ecology" the three modes give
-0 (exact), 483 (any) and 6 (all) results against the current dataset.
-
 performance optimizations for search in webapp.
 
 Progress bar for long searches.
