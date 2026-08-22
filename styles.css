@@ -188,13 +188,17 @@ body {
     border-top: 1px solid #ddd;
 }
 
-/* The table can outgrow a phone, so let it scroll rather than push the page wide */
-.help-table {
-    display: block;
+/* The table can outgrow a phone, so let it scroll rather than push the page wide.
+   The scrolling belongs on a wrapper: display:block on a <table> stops it laying
+   out as a table, and the columns stop lining up. */
+.table-scroll {
     overflow-x: auto;
-    width: 100%;
-    border-collapse: collapse;
     margin: 16px 0;
+}
+.help-table {
+    width: 100%;
+    min-width: 460px;
+    border-collapse: collapse;
 }
 .help-table th,
 .help-table td {

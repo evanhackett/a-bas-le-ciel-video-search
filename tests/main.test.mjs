@@ -3,6 +3,7 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { loadApp, FakeXHR, makeVideo, makeVideos } from './helpers.mjs';
 
@@ -309,6 +310,24 @@ describe('pagination', () => {
         app.app.lastPage();
         assert.equal(app.pageInfo(), 'Page 1 of 1');
     });
+});
+
+describe('static page markup', () => {
+    // Regression: neither page declared a charset, so browsers guessed and the
+    // em dashes in help.html rendered as "a with a hat" mojibake.
+    for (const page of ['index.html', 'help.html']) {
+        test(`${page} declares utf-8`, () => {
+            const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
+            assert.match(html, /<meta\s+charset="utf-8">/i);
+
+            // The declaration only counts if it is early enough for the browser to
+            // act on it, and it must come before any non-ASCII byte.
+            const at = html.search(/<meta\s+charset=/i);
+            assert.ok(at < 1024, `charset declared at byte ${at}`);
+            const firstNonAscii = [...html].findIndex(ch => ch.charCodeAt(0) > 127);
+            assert.ok(firstNonAscii === -1 || at < firstNonAscii, 'non-ASCII before charset');
+        });
+    }
 });
 
 describe('help link', () => {
