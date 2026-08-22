@@ -100,6 +100,8 @@ let importCounter = 0;
  *                  bar falls back to EXPECTED_BYTES.
  *   cached      -- an archive to pre-load into the fake IndexedDB under
  *                  versionMeta.version, standing in for a previous visit.
+ *   seed        -- { key: archive } pairs to pre-load under keys of your own,
+ *                  for the stale-copy cases `cached` cannot express.
  *   failOpen    -- make every indexedDB.open() fail, as in a private window.
  *   failWrites  -- make every write abort, as when the quota is full.
  *
@@ -109,6 +111,7 @@ let importCounter = 0;
 export async function loadApp({
     versionMeta = null,
     cached = null,
+    seed = null,
     failOpen = false,
     failWrites = false,
 } = {}) {
@@ -124,10 +127,11 @@ export async function loadApp({
     idb.failOpen = failOpen;
     idb.failWrites = failWrites;
 
-    if (cached) {
+    if (cached || seed) {
         // Seed the store directly rather than through a transaction: this is
         // meant to look like the state a previous visit left behind.
-        idb.stores.set('datasets', new Map([[versionMeta.version, cached]]));
+        const entries = cached ? [[versionMeta.version, cached]] : Object.entries(seed);
+        idb.stores.set('datasets', new Map(entries));
         idb._initialised = true;
     }
 

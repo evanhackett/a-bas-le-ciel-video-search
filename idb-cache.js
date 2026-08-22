@@ -38,6 +38,44 @@ function openDb() {
 }
 
 /**
+ * Run `work` against the object store in one transaction, swallowing failures.
+ *
+ * `work` receives the store and queues its requests synchronously; anything it
+ * queues from inside a request callback joins the same transaction, which is
+ * how evictOthers() gets its deletes in.
+ */
+async function withTransaction(mode, work, failureMessage) {
+    try {
+        const db = await openDb();
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE, mode);
+                work(tx.objectStore(STORE));
+                tx.oncomplete = resolve;
+                // QuotaExceededError surfaces here rather than on the request:
+                // the write is only attempted when the transaction commits.
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            });
+        } finally {
+            db.close();
+        }
+    } catch (error) {
+        console.warn(failureMessage, error);
+    }
+}
+
+/** Queue a delete for every key but `keep`. Must be called inside a transaction. */
+function evictOthers(store, keep) {
+    const keys = store.getAllKeys();
+    keys.onsuccess = () => {
+        for (const key of keys.result) {
+            if (key !== keep) store.delete(key);
+        }
+    };
+}
+
+/**
  * The archive stored under `version`, or null if this build is not cached.
  *
  * A miss and a failure are deliberately the same answer. The caller's next move
@@ -60,48 +98,49 @@ export async function idbGet(version) {
 }
 
 /**
- * Store the archive under `version`, dropping every other key.
+ * Drop every cached dataset except `version`.
  *
- * The old keys are dead the moment a new dataset ships -- nothing will ask for
- * them again -- and each one is another ~55 MB held against the origin's quota,
- * so leaving them would make the next write the one that fails.
+ * Called on a cache miss, before the download rather than after it. Anything
+ * still in the store at that point is keyed to a dataset that has since been
+ * replaced, and idbGet() only ever asks for the current hash -- so it will
+ * never be read again, and holding it costs ~55 MB of the origin's quota.
+ *
+ * Clearing first also halves peak usage. Evicting as part of the write instead
+ * would leave the old and new archives both live until the transaction
+ * committed, which is precisely when a tight quota refuses it.
+ *
+ * Deliberately not called when the version check fails: without a current
+ * fingerprint there is no way to know what is stale, and one flaky fetch of
+ * version.json should not throw away a cache that is probably fine.
+ */
+export async function idbEvictExcept(version) {
+    await withTransaction(
+        'readwrite',
+        (store) => evictOthers(store, version),
+        'archive cache: eviction failed, a stale copy is still taking up space',
+    );
+}
+
+/**
+ * Store the archive under `version`.
  *
  * Resolves either way. The page has already rendered from the network response
  * by the time this runs, so a failed write costs nothing today; it only means
  * the next visit pays for the download again.
+ *
+ * Evicts alongside the write as well as before it. By the time this runs the
+ * store should already be empty, so the sweep is normally a no-op -- it is here
+ * so that a caller which skips idbEvictExcept() cannot stack copies.
  */
 export async function idbPut(version, videos) {
-    try {
-        const db = await openDb();
-        try {
-            await new Promise((resolve, reject) => {
-                const tx = db.transaction(STORE, 'readwrite');
-                const store = tx.objectStore(STORE);
-
-                store.put(videos, version);
-
-                // Issued inside the same transaction so the eviction cannot be
-                // interleaved with another tab's write, and so a quota failure
-                // on the put rolls the deletes back with it.
-                const keys = store.getAllKeys();
-                keys.onsuccess = () => {
-                    for (const key of keys.result) {
-                        if (key !== version) store.delete(key);
-                    }
-                };
-
-                tx.oncomplete = resolve;
-                // QuotaExceededError surfaces here rather than on the put call:
-                // the write is only attempted when the transaction commits.
-                tx.onerror = () => reject(tx.error);
-                tx.onabort = () => reject(tx.error);
-            });
-        } finally {
-            db.close();
-        }
-    } catch (error) {
-        console.warn('archive cache: write failed, the next visit will re-download', error);
-    }
+    await withTransaction(
+        'readwrite',
+        (store) => {
+            store.put(videos, version);
+            evictOthers(store, version);
+        },
+        'archive cache: write failed, the next visit will re-download',
+    );
 }
 
 /**
@@ -110,20 +149,9 @@ export async function idbPut(version, videos) {
  * whole origin's storage from devtools.
  */
 export async function idbClear() {
-    try {
-        const db = await openDb();
-        try {
-            await new Promise((resolve, reject) => {
-                const tx = db.transaction(STORE, 'readwrite');
-                tx.objectStore(STORE).clear();
-                tx.oncomplete = resolve;
-                tx.onerror = () => reject(tx.error);
-                tx.onabort = () => reject(tx.error);
-            });
-        } finally {
-            db.close();
-        }
-    } catch (error) {
-        console.warn('archive cache: clear failed', error);
-    }
+    await withTransaction(
+        'readwrite',
+        (store) => store.clear(),
+        'archive cache: clear failed',
+    );
 }

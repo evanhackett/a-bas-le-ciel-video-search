@@ -181,15 +181,57 @@ describe('the archive cache', () => {
         });
     });
 
-    test('evicts the previous dataset rather than stacking copies', async () => {
-        await reload({ versionMeta: META, cached: ARCHIVE });
-        // A new dataset ships: same browser, new fingerprint.
-        app.idb.stores.get('datasets').set('older-version', makeVideos(2));
+    describe('evicting the previous dataset', () => {
+        test('ends a new-dataset load holding only the new one', async () => {
+            await reload({ versionMeta: META, seed: { 'older-version': makeVideos(2) } });
+            await app.deliverVideos(ARCHIVE);
 
-        await reload({ versionMeta: { ...META, version: 'def456' } });
-        await app.deliverVideos(ARCHIVE);
+            assert.deepEqual(app.idb.keys('datasets'), [META.version]);
+        });
 
-        assert.deepEqual(app.idb.keys('datasets'), ['def456']);
+        // Ordering, not just the end state. Evicting as part of the write would
+        // leave both archives live until the transaction committed -- 110 MB for
+        // this dataset -- which is exactly when a tight quota refuses it.
+        test('frees the old copy before the download, not after', async () => {
+            await reload({ versionMeta: META, seed: { 'older-version': makeVideos(2) } });
+
+            // loadApp() returns once the XHR is away and nothing has been
+            // delivered yet, so this is the state during the download.
+            assert.ok(FakeXHR.last.sent, 'the download had not started');
+            assert.deepEqual(app.idb.keys('datasets'), [],
+                             'the stale archive was still held during the download');
+        });
+
+        test('clears up even when the download is never cached', async () => {
+            // A torn fingerprint/archive pair skips the write entirely, so
+            // eviction is the only thing that reclaims the space.
+            await reload({ versionMeta: META, seed: { 'older-version': makeVideos(2) } });
+            await app.deliverVideos(makeVideos(2));   // META.count says 3
+
+            assert.deepEqual(app.idb.keys('datasets'), []);
+        });
+
+        test('clears up even when the write fails', async () => {
+            await reload({
+                versionMeta: META,
+                seed: { 'older-version': makeVideos(2) },
+                failWrites: true,
+            });
+            await app.deliverVideos(ARCHIVE);
+
+            // The eviction aborts with everything else, so the stale copy
+            // survives -- but it is never served, and the page still works.
+            assert.equal(app.cards().length, 3);
+        });
+
+        // A blip on version.json must not cost the stored archive as well: with
+        // no fingerprint there is no way to tell what is stale.
+        test('leaves the cache alone when the fingerprint cannot be read', async () => {
+            await reload({ seed: { 'some-version': ARCHIVE } });
+            await app.deliverVideos(ARCHIVE);
+
+            assert.deepEqual(app.idb.keys('datasets'), ['some-version']);
+        });
     });
 
     // The CDN skew this guards against is real: version.json and videos.json are

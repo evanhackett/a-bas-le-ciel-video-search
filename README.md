@@ -82,9 +82,21 @@ So the cache key is the content, not the deploy. `write-version.py` writes
 `loadVideoData()` fetches that first — with `cache: 'no-cache'`, so it revalidates
 rather than honouring the 600-second window — and looks for `version` in
 IndexedDB. A hit renders immediately with no download and no progress bar. A miss
-downloads as before and stores the result under the new key, evicting the old one.
+downloads as before and stores the result under the new key.
 
-Two things keep it honest:
+**A miss evicts before it downloads.** Anything left in the store at that point is
+keyed to a dataset that has since been replaced, so it will never be read again.
+Clearing it first rather than as part of the write halves peak usage — evicting on
+write would leave the old and new archives both live until the transaction
+committed, roughly 110 MB for this dataset, which is precisely when a tight quota
+refuses it. It also reclaims the space on the paths that never reach the write at
+all, like the count mismatch below.
+
+A failed version check is the one case that evicts nothing. Without a current
+fingerprint there is no way to tell what is stale, and one flaky fetch of
+`version.json` should cost a download, not the stored copy as well.
+
+Two more things keep it honest:
 
 - **The archive is only cached if `data.length` matches `count`.** `version.json`
   and `videos.json` are independent CDN objects with independent lifetimes, so a

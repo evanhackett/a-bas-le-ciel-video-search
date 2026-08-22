@@ -10,7 +10,7 @@ import {
     validateQuery,
 } from './search.js';
 
-import { idbGet, idbPut } from './idb-cache.js';
+import { idbGet, idbPut, idbEvictExcept } from './idb-cache.js';
 
 let videos = [];
 let currentPage = 1;
@@ -135,7 +135,17 @@ export async function loadVideoData() {
             renderArchive(cached);
             return;
         }
+
+        // A miss means anything still in the store belongs to a dataset that
+        // has moved on, so it will never be read again. Dropping it now rather
+        // than as part of the write keeps the old and new archives from being
+        // live at the same time, which is what makes a tight quota refuse the
+        // write. It also covers the paths below that never reach idbPut().
+        await idbEvictExcept(meta.version);
     } catch (error) {
+        // No fingerprint means no way to tell what is stale, so the cache is
+        // left exactly as it is: a flaky fetch of version.json should cost one
+        // download, not the stored copy as well.
         console.warn('archive cache: version check failed, downloading', error);
     }
 
