@@ -599,6 +599,8 @@ def main():
     clear_checkpoint()
     print(f'wrote {len(all_videos_sorted)} videos to updated_videos.json')
     print('promote it with:  mv updated_videos.json videos.json')
+    print('then refresh the cache fingerprint:  python3 write-version.py')
+    print('Make sure to refresh the cache AFTER promoting the new videos.json file, otherwise write-version.py will be working off the old json.')
 
 
 def parse_args(argv=None):
