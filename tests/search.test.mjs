@@ -7,6 +7,7 @@ import {
     MIN_SEARCH_LENGTH,
     tokenize,
     formatDate,
+    escapeHtml,
     highlightText,
     searchableContent,
     matchesQuery,
@@ -115,6 +116,79 @@ describe('highlightText', () => {
     test('does not let a token match as a wildcard', () => {
         // '.' as a regex would highlight every character; escaped it matches only a dot
         assert.equal(highlightText('ab.cd', ['.']), 'ab<span class="highlight">.</span>cd');
+    });
+});
+
+describe('escapeHtml', () => {
+    test('escapes the five characters that matter in markup', () => {
+        assert.equal(escapeHtml(`<a href="x">&'`), '&lt;a href=&quot;x&quot;&gt;&amp;&#39;');
+    });
+
+    test('escapes the ampersand first, so entities are not double-built', () => {
+        assert.equal(escapeHtml('&lt;'), '&amp;lt;');
+    });
+
+    test('leaves ordinary prose alone', () => {
+        assert.equal(escapeHtml('a plain sentence, with punctuation.'),
+                     'a plain sentence, with punctuation.');
+    });
+
+    test('leaves newlines intact, which the description relies on', () => {
+        assert.equal(escapeHtml('one\n\ntwo'), 'one\n\ntwo');
+    });
+});
+
+describe('highlightText escaping', () => {
+    test('markup in the text is escaped, not rendered', () => {
+        assert.equal(
+            highlightText('<script>alert(1)</script>', ['absent']),
+            '&lt;script&gt;alert(1)&lt;/script&gt;',
+        );
+    });
+
+    test('markup inside a match is escaped too', () => {
+        const out = highlightText('a <b> tag', ['<b>']);
+        assert.equal(out, 'a <span class="highlight">&lt;b&gt;</span> tag');
+    });
+
+    test('the highlight markup itself is the only markup in the output', () => {
+        const out = highlightText('<i>x</i>', ['x']);
+        assert.equal(out, '&lt;i&gt;<span class="highlight">x</span>&lt;/i&gt;');
+    });
+
+    // Regression: a replace() per token let a later token match the markup an
+    // earlier one had inserted, producing `<<span class="highlight">span</span>...`
+    test('a token cannot match the markup another token inserted', () => {
+        const out = highlightText('highlight this', ['high', 'span']);
+        assert.equal(out, '<span class="highlight">high</span>light this');
+    });
+
+    test('searching for "class" does not corrupt the output either', () => {
+        const out = highlightText('a class of its own', ['class']);
+        assert.equal(out, 'a <span class="highlight">class</span> of its own');
+    });
+
+    test('the longest token wins where two overlap', () => {
+        assert.equal(highlightText('catastrophe', ['cat', 'catastrophe']),
+                     '<span class="highlight">catastrophe</span>');
+    });
+
+    test('an ampersand is escaped even when it is the match', () => {
+        assert.equal(highlightText('a & b', ['&']),
+                     'a <span class="highlight">&amp;</span> b');
+    });
+
+    test('no tokens still escapes', () => {
+        assert.equal(highlightText('<b>', []), '&lt;b&gt;');
+    });
+
+    test('blank tokens are ignored rather than matching everywhere', () => {
+        assert.equal(highlightText('abc', ['']), 'abc');
+    });
+
+    test('newlines survive, so paragraph breaks can be applied afterwards', () => {
+        assert.equal(highlightText('one\n\ntwo', ['one']),
+                     '<span class="highlight">one</span>\n\ntwo');
     });
 });
 

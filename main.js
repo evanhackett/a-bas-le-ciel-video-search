@@ -4,6 +4,7 @@
 import {
     tokenize,
     formatDate,
+    escapeHtml,
     highlightText,
     filterVideos,
     validateQuery,
@@ -166,12 +167,16 @@ export function displayResults() {
     currentResults.forEach(video => {
         const videoElement = document.createElement('div');
         videoElement.classList.add('result-item');
+        // Everything interpolated here is escaped: highlightText() returns HTML it
+        // escaped itself, and the attributes and the date go through escapeHtml().
+        // Paragraph breaks are applied after highlighting rather than before --
+        // escaping would otherwise turn our own <br> tags into visible text.
         videoElement.innerHTML = `
             <div class="result-left">
-                <img src="${video.thumbnail}" alt="Thumbnail">
-                <p>${formatDate(video.upload_date)} - <a href="${video.url}" target="_blank">Watch Video on YouTube</a></p>
+                <img src="${escapeHtml(video.thumbnail)}" alt="Thumbnail">
+                <p>${escapeHtml(formatDate(video.upload_date))} - <a href="${escapeHtml(video.url)}" target="_blank">Watch Video on YouTube</a></p>
                 <h3>${highlightText(video.title, highlightTokens)}</h3>
-                <p>${highlightText(video.description.replace(/\n/g, '<br><br>'), highlightTokens)}</p>
+                <p>${highlightText(video.description, highlightTokens).replace(/\n/g, '<br><br>')}</p>
             </div>
             <div class="result-right">
                 <h3>Transcript</h3>

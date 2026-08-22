@@ -31,6 +31,14 @@ keep it in step when the matching rules change. There is no search index — it'
 linear scan over every video on every query. At the current dataset size that's
 fast enough to feel instant.
 
+**`highlightText()` is the only thing that may build HTML from video text.** It
+escapes as it goes, in one pass over the raw string, and returns markup that is safe
+to hand to `innerHTML`. Anything else interpolated into a card — attributes, the
+formatted date — goes through `escapeHtml()`. Do not escape before highlighting (a
+search for `amp` would match inside `&amp;`) or after (it would eat the highlight
+spans). The description's `\n` → `<br><br>` conversion is applied *after*
+highlighting for that reason.
+
 The split exists so the matching logic can be tested without a browser. Keep
 `search.js` free of DOM access; everything that touches the page belongs in
 `main.js`. Event handlers are attached in `wireEvents()` — do not add inline
@@ -457,9 +465,6 @@ You will see these locally but not in a fresh clone.
 
 ## Known issues
 
-- **Results are injected via `innerHTML` without escaping.** The data comes from the
-  YouTube API rather than from users, so this is low risk in practice, but a video
-  description containing markup will render as markup.
 
 ## Todo
 

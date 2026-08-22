@@ -352,6 +352,54 @@ describe('static page markup', () => {
     }
 });
 
+describe('escaping in rendered cards', () => {
+    const render = (overrides) => {
+        app.deliverVideos([makeVideo({ title: 'Ecology', ...overrides })]);
+        app.search('Ecology');
+    };
+
+    test('markup in a title arrives as text, not as elements', () => {
+        render({ title: 'Ecology <img src=x onerror="boom()">' });
+
+        assert.equal(app.$$('#results .result-left h3 img').length, 0);
+        assert.match(app.cardTitles()[0], /<img src=x onerror="boom\(\)">/);
+    });
+
+    test('markup in a transcript arrives as text', () => {
+        render({ transcript: 'Ecology <script>boom()</script>' });
+
+        assert.equal(app.$$('#results .result-right script').length, 0);
+        assert.match(app.$('#results .result-right p').textContent, /<script>/);
+    });
+
+    test('a quote in an attribute cannot break out of it', () => {
+        render({ thumbnail: 'x" onerror="boom()' });
+
+        const img = app.$('#results .result-left img');
+        assert.equal(img.getAttribute('onerror'), null);
+        assert.equal(img.getAttribute('src'), 'x" onerror="boom()');
+    });
+
+    test('the link href is escaped but still usable', () => {
+        render({ url: 'https://youtu.be/a?b=1&c=2' });
+
+        assert.equal(app.$('#results .result-left a').getAttribute('href'),
+                     'https://youtu.be/a?b=1&c=2');
+    });
+
+    test('description line breaks still become paragraph breaks', () => {
+        render({ description: 'first line\n\nsecond line' });
+
+        const paragraphs = app.$$('#results .result-left p');
+        assert.match(paragraphs[1].innerHTML, /first line<br><br><br><br>second line/);
+    });
+
+    test('highlighting still works on ordinary text', () => {
+        render({});
+        assert.equal(app.$$('#results .result-left h3 .highlight').length, 1);
+    });
+});
+
 describe('search progress', () => {
     beforeEach(() => {
         app.deliverVideos(makeVideos(5));

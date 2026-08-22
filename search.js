@@ -31,14 +31,52 @@ export function escapeRegExp(text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Wrap every occurrence of each token in a highlight span. */
+/**
+ * Escape text for interpolation into HTML.
+ *
+ * Video titles, descriptions and transcripts come from the YouTube API, so they
+ * are not attacker-controlled here, but they are not ours either: an ampersand or
+ * an angle bracket in a description used to be handed to innerHTML as markup.
+ */
+export function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * Wrap every occurrence of each token in a highlight span, escaping everything
+ * else. Returns HTML, and is the only thing that should build it from video text.
+ *
+ * One pass over the raw string, rather than a replace() per token, for two
+ * reasons. Escaping has to happen on the original text: escaping first would make
+ * a search for "amp" match inside "&amp;", and escaping afterwards would eat the
+ * spans this function just inserted. And a per-token pass lets a later token match
+ * markup an earlier one inserted -- searching "span" or "class" used to produce
+ * `<<span class="highlight">span</span> class=...` and wreck the card.
+ *
+ * Longest token first, so "catastrophe" wins over "cat" where both are searched.
+ */
 export function highlightText(text, queryTokens) {
-    let highlightedText = text;
-    queryTokens.forEach(token => {
-        const regex = new RegExp(`(${escapeRegExp(token)})`, 'gi');
-        highlightedText = highlightedText.replace(regex, '<span class="highlight">$1</span>');
-    });
-    return highlightedText;
+    const tokens = [...new Set((queryTokens || []).filter(Boolean))]
+        .sort((a, b) => b.length - a.length);
+
+    if (tokens.length === 0) return escapeHtml(text);
+
+    const pattern = new RegExp(tokens.map(escapeRegExp).join('|'), 'gi');
+    let html = '';
+    let cursor = 0;
+
+    for (const match of String(text).matchAll(pattern)) {
+        html += escapeHtml(String(text).slice(cursor, match.index));
+        html += `<span class="highlight">${escapeHtml(match[0])}</span>`;
+        cursor = match.index + match[0].length;
+    }
+
+    return html + escapeHtml(String(text).slice(cursor));
 }
 
 /**
