@@ -14,8 +14,10 @@ let videos = [];
 let currentPage = 1;
 let resultsPerPage = 10;
 let searchResults = [];
-let query;
-let queryTokens;
+// Initialised rather than left undefined: the results are rendered once on load,
+// before any search has set them, and displayResults() reads them for highlighting.
+let query = '';
+let queryTokens = [];
 let options;
 
 /**
@@ -69,6 +71,10 @@ export function loadVideoData() {
                     const data = JSON.parse(xhr.responseText);
                     videos = data;
                     document.getElementById('search-container').style.display = 'block';
+                    // Only on success: loadVideoData()'s catch swallows failures and
+                    // resolves, so chaining this onto the promise would render an
+                    // empty archive as though it were the real one.
+                    showAllVideos();
                     resolve();
                 } catch (error) {
                     reject('Failed to parse JSON response');
@@ -124,6 +130,29 @@ function readOptions() {
     };
 }
 
+/**
+ * Show the whole archive, newest first, as the landing state.
+ *
+ * No sorting here: get-video-data.py writes videos.json in reverse-chronological
+ * order and test_records_are_sorted_newest_first holds it to that, so the file
+ * order is the display order. Sorting 3,000-odd records on every load to
+ * re-establish something already guaranteed would be waste.
+ *
+ * displayResults() renders only the current page, so this costs one page of cards
+ * however large the archive gets.
+ */
+export function showAllVideos() {
+    searchResults = videos;
+    currentPage = 1;
+    displayResults();
+    updatePagination();
+
+    // Overrides the "Found N result(s)" displayResults() just wrote: nothing has
+    // been searched for yet, and "found" would imply it had.
+    document.getElementById('result-count').textContent =
+        `Showing all ${videos.length} videos, newest first. Search to narrow them down.`;
+}
+
 export function searchVideos() {
     query = document.getElementById('search-input').value.trim().toLowerCase();
     options = readOptions();
@@ -162,7 +191,8 @@ export function displayResults() {
     const endIndex = Math.min(startIndex + resultsPerPage, searchResults.length);
     const currentResults = searchResults.slice(startIndex, endIndex);
 
-    const highlightTokens = options.mode === 'exact' ? [query] : queryTokens;
+    // options is undefined until the first search; nothing is highlighted until then
+    const highlightTokens = options?.mode === 'exact' ? [query] : queryTokens;
 
     currentResults.forEach(video => {
         const videoElement = document.createElement('div');

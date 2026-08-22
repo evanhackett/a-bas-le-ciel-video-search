@@ -2,7 +2,7 @@ todo
 
 deploy script to server
 
-on initial load, show all videos in search results
+DONE: on initial load the whole archive shows, newest first, paginated as usual.
 
 DONE: gh-pages serves videos.json gzipped, so event.total was the compressed size
 (17.9MB) while event.loaded counted decompressed bytes (53MB) - the bar hit 100% a

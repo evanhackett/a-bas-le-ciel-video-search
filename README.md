@@ -21,6 +21,12 @@ natively — there is nothing to compile or bundle.
 | `styles.css` | All styling. |
 | `videos.json` | **The dataset.** ~53 MB, one object per video. |
 
+Once the dataset lands, `showAllVideos()` renders the whole archive as the landing
+state, newest first. It does no sorting: `get-video-data.py` writes `videos.json`
+reverse-chronologically and `test_records_are_sorted_newest_first` holds it there,
+so file order is display order. Only the current page is rendered, so the cost does
+not grow with the archive.
+
 `loadVideoData()` XHRs `videos.json` into a module-level array, then `searchVideos()`
 filters it with plain substring matching over whichever of
 title / description / transcript you've checked, in one of three modes —
@@ -471,7 +477,8 @@ You will see these locally but not in a fresh clone.
 As of the last review, **none of these have been done**:
 
 - [ ] Deploy script. Probably obsolete — deploying is just `git push`.
-- [ ] On initial load, show all videos in the results instead of an empty list.
+- [x] On initial load, show all videos in the results instead of an empty list —
+      done; `showAllVideos()` runs once the dataset lands.
 - [x] Fix the progress bar on GitHub Pages — done; it measures against
       `EXPECTED_BYTES` rather than the compressed `Content-Length`.
 - [x] Fix results-per-page dropdown and pagination layout on small screens — done;

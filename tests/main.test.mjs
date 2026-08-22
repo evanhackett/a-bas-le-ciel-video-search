@@ -212,10 +212,15 @@ describe('searching', () => {
     });
 
     test('alerts and searches nothing when the query is too short', () => {
+        const before = app.cardTitles();
         app.search('ab');
+
         assert.equal(app.alerts.length, 1);
         assert.match(app.alerts[0], /at least 3 characters/);
-        assert.equal(app.cards().length, 0);
+        // The search is refused, so the landing list stands. Asserting it is
+        // unchanged says that directly; asserting it is empty only worked while
+        // the page happened to start with nothing rendered.
+        assert.deepEqual(app.cardTitles(), before);
     });
 
     test('alerts when an any-word query contains a short word', () => {
@@ -352,6 +357,64 @@ describe('static page markup', () => {
     }
 });
 
+describe('the landing state', () => {
+    test('renders the archive without anyone searching', () => {
+        app.deliverVideos(makeVideos(25));
+        assert.equal(app.cards().length, 10);   // one page of it
+    });
+
+    test('keeps the order the dataset is in, which is newest first', () => {
+        app.deliverVideos([
+            makeVideo({ id: 'new', title: 'Newest', upload_date: '20260101000000' }),
+            makeVideo({ id: 'mid', title: 'Middle', upload_date: '20250101000000' }),
+            makeVideo({ id: 'old', title: 'Oldest', upload_date: '20240101000000' }),
+        ]);
+
+        assert.deepEqual(app.cardTitles(), ['Newest', 'Middle', 'Oldest']);
+    });
+
+    test('says what is being shown rather than claiming a search found it', () => {
+        app.deliverVideos(makeVideos(25));
+
+        const text = app.$('#result-count').textContent;
+        assert.match(text, /Showing all 25 videos/);
+        assert.doesNotMatch(text, /Found/);
+    });
+
+    test('highlights nothing, because nothing has been searched for', () => {
+        app.deliverVideos(makeVideos(3));
+        assert.equal(app.$$('#results .highlight').length, 0);
+    });
+
+    test('paginates the whole archive', () => {
+        app.deliverVideos(makeVideos(25));
+        assert.equal(app.pageInfo(), 'Page 1 of 3');
+    });
+
+    test('a search then narrows it', () => {
+        app.deliverVideos(makeVideos(25));
+        assert.equal(app.cards().length, 10);
+
+        app.search('Video 3');
+        assert.ok(app.cards().length < 10);
+        assert.match(app.$('#result-count').textContent, /Found/);
+    });
+
+    test('an HTTP error renders nothing rather than an empty archive', () => {
+        FakeXHR.last.httpError(404);
+
+        assert.equal(app.cards().length, 0);
+        assert.doesNotMatch(app.$('#result-count').textContent, /Showing all/);
+    });
+
+    test('a network error renders nothing either', () => {
+        FakeXHR.last.networkError();
+
+        assert.equal(app.cards().length, 0);
+        assert.doesNotMatch(app.$('#result-count').textContent, /Showing all/);
+    });
+});
+
 describe('escaping in rendered cards', () => {
     const render = (overrides) => {
         app.deliverVideos([makeVideo({ title: 'Ecology', ...overrides })]);
@@ -469,11 +532,12 @@ describe('event wiring', () => {
     });
 
     test('another key does not run a search', () => {
+        const before = app.cardTitles();
         app.$('#search-input').value = 'Video 3';
         app.$('#search-input').dispatchEvent(
             new app.window.KeyboardEvent('keypress', { key: 'a', bubbles: true }),
         );
-        assert.equal(app.cards().length, 0);
+        assert.deepEqual(app.cardTitles(), before);
     });
 
     test('the next button advances the page', () => {
