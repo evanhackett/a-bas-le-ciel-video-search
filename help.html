@@ -57,12 +57,11 @@
             </li>
             <li>
                 Matching is by substring, not whole words — "cat" also
-                matches "catastrophe". This can be useful when you aren't sure which variant of a word was used. For example, searching "nihil" matches on "nihilist" and "nihilism", etc.
+                matches "catastrophe". This can be useful when you aren't sure which variant of a word was used. For example, searching "nihil" matches on "nihilist", "nihilism", "nihilistically", etc.
             </li>
-            <li>An empty search box shows everything.</li>
             <li>
                 Searches need at least three characters, and in <strong>any</strong>
-                mode so does each individual word. This is to get around performance issues. Besides, two-letter and one-letter phrases match nearly everything.
+                mode so does each individual word. I implemented this restriction to work around performance issues. Besides, two-letter and one-letter searches match nearly every video, making them not very useful anyway.
             </li>
             <li>Capitalisation is ignored.</li>
             <li>Your search terms are highlighted in the results. This may require scrolling carefully through the transcript to find the highlighted text.</li>
