@@ -3,7 +3,7 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 import { loadApp, FakeXHR, makeVideo, makeVideos } from './helpers.mjs';
 
@@ -67,35 +67,55 @@ describe('loading the dataset', () => {
 });
 
 describe('load progress bar', () => {
+    const MB = 1048576;
+    // What GitHub Pages actually reported for videos.json, verified with curl:
+    // content-encoding gzip, content-length 17969259 against 52258072 uncompressed.
+    const COMPRESSED_TOTAL = 17_969_259;
+
     test('grows the bar as bytes arrive', () => {
-        FakeXHR.last.progress(50, 200);
+        FakeXHR.last.progress(app.app.EXPECTED_BYTES / 4, COMPRESSED_TOTAL);
         assert.equal(app.$('#progress-bar').style.width, '25%');
         assert.equal(app.$('#progress-bar-container').style.display, 'block');
     });
 
-    test('ignores progress events without a computable length', () => {
-        FakeXHR.last.progress(50, 200);
-        assert.equal(app.$('#progress-bar').style.width, '25%');
-
-        // A chunked response reports no total; the bar should hold its position
-        FakeXHR.last.progress(999, 0, false);
-        assert.equal(app.$('#progress-bar').style.width, '25%');
+    // The bug this whole approach exists to kill. Measured against the compressed
+    // content-length, a half-finished download reads as 155% and the bar snaps to
+    // full a third of the way in.
+    test('ignores the compressed length the server reports', () => {
+        FakeXHR.last.progress(app.app.EXPECTED_BYTES / 2, COMPRESSED_TOTAL);
+        assert.equal(app.$('#progress-bar').style.width, '50%');
     });
 
-    // Regression (see README): GitHub Pages gzips videos.json, so event.total is the
-    // compressed size while event.loaded counts decompressed bytes. Uncapped that
-    // reached ~291%. Locally there is no gzip, which is why it only ever misbehaved
-    // on the deployed site.
-    test('caps the bar at 100% when the server reports a compressed length', () => {
-        FakeXHR.last.progress(52_258_072, 17_969_259);
-        const width = parseFloat(app.$('#progress-bar').style.width);
-        assert.ok(width <= 100, `bar reached ${width}%`);
+    test('caps the bar at 100% once the dataset outgrows the constant', () => {
+        FakeXHR.last.progress(app.app.EXPECTED_BYTES * 1.1, COMPRESSED_TOTAL);
+        assert.equal(app.$('#progress-bar').style.width, '100%');
     });
 
-    test('still reports genuine intermediate progress', () => {
-        // The cap must not flatten every reading to 100%
-        FakeXHR.last.progress(25, 100);
-        assert.equal(app.$('#progress-bar').style.width, '25%');
+    test('reports progress even without a computable length', () => {
+        // Nothing reads event.total any more, so a response with no Content-Length
+        // is no longer a reason to freeze the bar.
+        FakeXHR.last.progress(app.app.EXPECTED_BYTES / 2, 0, false);
+        assert.equal(app.$('#progress-bar').style.width, '50%');
+    });
+
+    test('shows how many bytes have arrived', () => {
+        FakeXHR.last.progress(24 * MB, COMPRESSED_TOTAL);
+        assert.equal(
+            app.$('#progress-text').textContent,
+            `24.0 MB of ${(app.app.EXPECTED_BYTES / MB).toFixed(1)} MB`,
+        );
+    });
+
+    // The guard that makes the constant safe to rely on: growth fails here with the
+    // number to paste in, rather than quietly skewing the bar.
+    test('EXPECTED_BYTES still matches videos.json', () => {
+        const actual = statSync(new URL('../videos.json', import.meta.url)).size;
+        const drift = Math.abs(actual - app.app.EXPECTED_BYTES) / actual;
+        assert.ok(
+            drift < 0.05,
+            `EXPECTED_BYTES is ${app.app.EXPECTED_BYTES} but videos.json is ${actual} `
+            + `(${(drift * 100).toFixed(1)}% out) -- set it to ${actual}`,
+        );
     });
 });
 
@@ -330,6 +350,22 @@ describe('static page markup', () => {
             assert.ok(firstNonAscii === -1 || at < firstNonAscii, 'non-ASCII before charset');
         });
     }
+});
+
+describe('search progress', () => {
+    beforeEach(() => {
+        app.deliverVideos(makeVideos(5));
+    });
+
+    test('clears the byte readout, which means nothing for a search', () => {
+        app.search('Video');
+        assert.equal(app.$('#progress-text').textContent, '');
+    });
+
+    test('hides the bar again when the search finishes', () => {
+        app.search('Video');
+        assert.equal(app.$('#progress-bar-container').style.display, 'none');
+    });
 });
 
 describe('help link', () => {

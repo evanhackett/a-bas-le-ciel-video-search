@@ -4,7 +4,9 @@ deploy script to server
 
 on initial load, show all videos in search results
 
-investigate why progress bar for loading json works on localhost but not on gh-pages.
+DONE: gh-pages serves videos.json gzipped, so event.total was the compressed size
+(17.9MB) while event.loaded counted decompressed bytes (53MB) - the bar hit 100% a
+third of the way in. Now measured against EXPECTED_BYTES in main.js, guarded by a test.
 
 DONE: fixed the "results per page" dropdown and pagination layout on small screens.
 The row needed 490px against ~350px on a phone. Root cause was main.js forcing

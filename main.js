@@ -17,24 +17,48 @@ let query;
 let queryTokens;
 let options;
 
+/**
+ * Uncompressed size of videos.json, in bytes.
+ *
+ * The progress bar cannot use event.total. GitHub Pages serves videos.json
+ * gzipped, so total is the compressed length (~17.9 MB) while event.loaded counts
+ * decompressed bytes (~53 MB) -- the ratio passes 100% about a third of the way
+ * through the download. No response header carries the uncompressed size, and the
+ * value is the same whether or not the transport compressed it, so a constant is
+ * the one thing that works both on Pages and on a local server.
+ *
+ * A test compares this against the real file and fails with the correct number
+ * when the dataset has grown enough to matter, so it cannot drift silently.
+ */
+export const EXPECTED_BYTES = 55_689_430;
+
+/** "24.3 MB". One decimal is as much precision as a loading message can use. */
+function formatMegabytes(bytes) {
+    return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
 export function loadVideoData() {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         const progressBarContainer = document.getElementById('progress-bar-container');
         const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
 
         xhr.open('GET', 'videos.json', true);
 
         xhr.onprogress = function(event) {
-            if (event.lengthComputable) {
-                // Capped because the two numbers can measure different things:
-                // GitHub Pages serves videos.json gzipped, so event.total is the
-                // compressed size while event.loaded counts decompressed bytes.
-                // Uncapped that reaches ~291% and the bar overflows its container.
-                const percentComplete = Math.min(100, (event.loaded / event.total) * 100);
-                progressBar.style.width = `${percentComplete}%`;
-                progressBarContainer.style.display = 'block';
-            }
+            // Measured against EXPECTED_BYTES rather than event.total; see above.
+            // Capped because the dataset grows between updates of that constant.
+            const percentComplete = Math.min(100, (event.loaded / EXPECTED_BYTES) * 100);
+            progressBar.style.width = `${percentComplete}%`;
+
+            // Always true even if the constant has drifted, and it gives a sense of
+            // scale on a slow connection
+            progressText.textContent =
+                `${formatMegabytes(event.loaded)} of ${formatMegabytes(EXPECTED_BYTES)}`;
+            progressBarContainer.style.display = 'block';
+            // No lengthComputable guard: nothing here reads event.total, so progress
+            // still shows for a response that arrives without a Content-Length.
         };
 
         xhr.onload = function() {
@@ -115,6 +139,9 @@ export function searchVideos() {
     const resultsDiv = document.getElementById('results');
     resultsDiv.innerHTML = '';
 
+    // The bar does double duty as the search progress indicator, where a byte
+    // count means nothing
+    document.getElementById('progress-text').textContent = '';
     document.getElementById('progress-bar-container').style.display = 'block';
 
     searchResults = filterVideos(videos, query, queryTokens, options, updateProgressBar);

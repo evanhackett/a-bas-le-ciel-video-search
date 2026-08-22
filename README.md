@@ -36,6 +36,21 @@ The split exists so the matching logic can be tested without a browser. Keep
 `main.js`. Event handlers are attached in `wireEvents()` — do not add inline
 `onclick` attributes, as module scope is not global and they will not resolve.
 
+### Why the progress bar uses a constant
+
+`loadVideoData()` sizes the bar against `EXPECTED_BYTES` in `main.js`, not against
+`event.total`. GitHub Pages serves `videos.json` gzipped, so `event.total` is the
+compressed length while `event.loaded` counts decompressed bytes — verified with
+`curl`, which reports `content-encoding: gzip` and `content-length: 17969259`
+against 52258072 uncompressed. Measuring one against the other reaches 100% about a
+third of the way through the download. No response header carries the uncompressed
+size.
+
+The constant is the same number in both environments, which is why it works on
+Pages and on a local server alike. **When `videos.json` grows, a test fails and
+tells you the value to paste in** — that guard is what makes hardcoding a size safe
+rather than a slow leak. The tolerance is 5%.
+
 **Previewing locally needs a web server.** ES modules are blocked over `file://`,
 so opening `index.html` by double-clicking will not work:
 
@@ -442,15 +457,6 @@ You will see these locally but not in a fresh clone.
 
 ## Known issues
 
-- **The load progress bar fills too early on the live site** (partly fixed). GitHub
-  Pages serves `videos.json` gzipped with `Content-Length: ~17.9 MB` (compressed),
-  while XHR's `event.loaded` counts *decompressed* bytes, up to ~53 MB. The ratio is
-  therefore wrong by about 3x. It is now capped at 100%, so the bar no longer
-  overflows its container — but it still reaches full about a third of the way
-  through the download and sits there. Locally there is no gzip, so the two numbers
-  agree and the bar is accurate. A real fix means an indeterminate bar once
-  `loaded > total` proves the response is compressed; dividing by a hardcoded
-  uncompressed size would need editing every time the dataset grows.
 - **Results are injected via `innerHTML` without escaping.** The data comes from the
   YouTube API rather than from users, so this is low risk in practice, but a video
   description containing markup will render as markup.
@@ -461,7 +467,8 @@ As of the last review, **none of these have been done**:
 
 - [ ] Deploy script. Probably obsolete — deploying is just `git push`.
 - [ ] On initial load, show all videos in the results instead of an empty list.
-- [ ] Fix the progress bar on GitHub Pages (cause diagnosed above).
+- [x] Fix the progress bar on GitHub Pages — done; it measures against
+      `EXPECTED_BYTES` rather than the compressed `Content-Length`.
 - [x] Fix results-per-page dropdown and pagination layout on small screens — done;
       the media query now wraps the row into counter / buttons / select.
 - [x] Add a "contains all words" mode — done; `matchesQuery()` now switches on

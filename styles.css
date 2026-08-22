@@ -142,6 +142,11 @@ body {
     margin-top: 20px;
     padding: 5px;
 }
+#progress-text {
+    margin-top: 6px;
+    font-size: 0.85em;
+    color: #555;
+}
 #progress-bar {
     width: 0%;
     height: 20px;
