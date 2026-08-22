@@ -12,11 +12,10 @@
 
         <p>
             This site searches the full text of every video on the channel, including
-            the <strong>transcripts</strong>. The three options above the search box
-            decide how your words are matched.
+            the transcripts. There are three main options to decide how your words are matched: <strong>exact</strong>, <strong>any</strong>, and <strong>all</strong>. 
         </p>
 
-        <p>The same search, <code>antinatalism ecology</code>, run three ways:</p>
+        <p>For example, searching "afghanistan nazi" will show different results depending on the mode:</p>
 
         <div class="table-scroll">
             <table class="help-table">
@@ -24,30 +23,30 @@
                     <tr>
                         <th>Mode</th>
                         <th>Matches a video when…</th>
-                        <th>Roughly how many</th>
+                        <th>How many videos match</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td><strong>exact</strong></td>
-                        <td>the phrase "antinatalism ecology" appears verbatim</td>
-                        <td>none — nobody says it that way</td>
-                    </tr>
-                    <tr>
-                        <td><strong>all</strong></td>
-                        <td>both "antinatalism" and "ecology" appear somewhere</td>
-                        <td>a handful</td>
+                        <td>the phrase "afghanistan nazi" appears verbatim</td>
+                        <td>zero results</td>
                     </tr>
                     <tr>
                         <td><strong>any</strong></td>
-                        <td>either "antinatalism" or "ecology" appears</td>
-                        <td>hundreds</td>
+                        <td>either "afghanistan" <strong>or</strong> "nazi" appears</td>
+                        <td>441 results</td>
+                    </tr>
+                    <tr>
+                        <td><strong>all</strong></td>
+                        <td>both "afghanistan" <strong>and</strong> "nazi" appear somewhere</td>
+                        <td>59 results</td>
                     </tr>
                 </tbody>
             </table>
         </div>
 
-        <p>If a search returns nothing, widen the mode: exact → all → any.</p>
+        <p>Each mode can be useful depending on what you are looking for.</p>
 
         <h2>Worth knowing</h2>
 
@@ -55,21 +54,20 @@
             <li>
                 The <strong>Title</strong>, <strong>Description</strong> and
                 <strong>Transcript</strong> checkboxes control where to look.
-                Transcripts are much the largest, so turning that one off narrows
-                things a lot.
             </li>
             <li>
-                Matching is by substring, not whole words — <code>cat</code> also
-                matches "catastrophe".
+                Matching is by substring, not whole words — "cat" also
+                matches "catastrophe". This can be useful when you aren't sure which variant of a word was used. For example, searching "nihil" matches on "nihilist" and "nihilism", etc.
             </li>
-            <li>An empty search box shows everything, newest first.</li>
+            <li>An empty search box shows everything.</li>
             <li>
                 Searches need at least three characters, and in <strong>any</strong>
-                mode so does each individual word.
+                mode so does each individual word. This is to get around performance issues. Besides, two-letter and one-letter phrases match nearly everything.
             </li>
-            <li>Capitalisation is ignored, and your terms are highlighted in the results.</li>
+            <li>Capitalisation is ignored.</li>
+            <li>Your search terms are highlighted in the results. This may require scrolling carefully through the transcript to find the highlighted text.</li>
             <li>
-                Everything runs in your browser: the archive downloads once when the
+                Everything runs in your browser: the entire archive downloads once when the
                 page loads, which is why the first load takes a moment.
             </li>
         </ul>
