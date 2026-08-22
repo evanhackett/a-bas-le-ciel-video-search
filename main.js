@@ -169,14 +169,19 @@ export function displayResults() {
         videoElement.classList.add('result-item');
         // Everything interpolated here is escaped: highlightText() returns HTML it
         // escaped itself, and the attributes and the date go through escapeHtml().
-        // Paragraph breaks are applied after highlighting rather than before --
-        // escaping would otherwise turn our own <br> tags into visible text.
+        // Line breaks are applied after highlighting rather than before -- escaping
+        // would otherwise turn our own <br> tags into visible text.
+        //
+        // One <br> per newline, not two. Descriptions use a single newline for a
+        // line break and a blank line for a paragraph gap -- single newlines run
+        // 13:1 over doubles across the dataset -- so doubling put a blank line
+        // between what should be consecutive lines, such as a run of URLs.
         videoElement.innerHTML = `
             <div class="result-left">
                 <img src="${escapeHtml(video.thumbnail)}" alt="Thumbnail">
                 <p>${escapeHtml(formatDate(video.upload_date))} - <a href="${escapeHtml(video.url)}" target="_blank">Watch Video on YouTube</a></p>
                 <h3>${highlightText(video.title, highlightTokens)}</h3>
-                <p>${highlightText(video.description, highlightTokens).replace(/\n/g, '<br><br>')}</p>
+                <p>${highlightText(video.description, highlightTokens).replace(/\n/g, '<br>')}</p>
             </div>
             <div class="result-right">
                 <h3>Transcript</h3>

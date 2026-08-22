@@ -387,11 +387,20 @@ describe('escaping in rendered cards', () => {
                      'https://youtu.be/a?b=1&c=2');
     });
 
-    test('description line breaks still become paragraph breaks', () => {
-        render({ description: 'first line\n\nsecond line' });
+    test('a newline becomes one line break, not two', () => {
+        // Descriptions put consecutive URLs on their own lines separated by a
+        // single newline; doubling dropped a blank line between them.
+        render({ description: 'first line\nsecond line' });
 
         const paragraphs = app.$$('#results .result-left p');
-        assert.match(paragraphs[1].innerHTML, /first line<br><br><br><br>second line/);
+        assert.match(paragraphs[1].innerHTML, /first line<br>second line/);
+    });
+
+    test('a blank line still reads as a paragraph gap', () => {
+        render({ description: 'first para\n\nsecond para' });
+
+        const paragraphs = app.$$('#results .result-left p');
+        assert.match(paragraphs[1].innerHTML, /first para<br><br>second para/);
     });
 
     test('highlighting still works on ordinary text', () => {
