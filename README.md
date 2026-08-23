@@ -22,6 +22,7 @@ natively — there is nothing to compile or bundle.
 | `styles.css` | All styling. |
 | `videos.json` | **The dataset.** ~53 MB, one object per video. |
 | `version.json` | Fingerprint of `videos.json`. Written by `write-version.py`; the cache key. |
+| `update-site.py` | Runs the whole update: fetch, promote, re-fingerprint. |
 
 Once the dataset lands, `showAllVideos()` renders the whole archive as the landing
 state, newest first. Searching with an empty box returns to it, which is why
@@ -213,8 +214,25 @@ Neither suite talks to the YouTube API or needs a key.
 
 ## Updating the data
 
-`get-video-data.py` works out which videos are missing, fetches them with their
-transcripts, merges everything, and sorts reverse-chronologically.
+`./update-site.py` runs the whole update end to end — fetch, promote, re-fingerprint
+— and is the way to do it. Flags it does not recognise go through to
+`get-video-data.py`, so `./update-site.py --proxy` fetches through Webshare. It
+launches the venv interpreter for the fetch itself, so it does not matter whether
+the venv is activated.
+
+```bash
+cd my-site
+./update-site.py
+```
+
+It stops at the first step that fails, so a blocked or interrupted fetch leaves
+`videos.json` and `version.json` untouched and the next run resumes from the
+checkpoint. Add `--commit` to commit the two changed files, or `--push` to commit
+and deploy. Neither happens by default.
+
+The rest of this section describes the fetch step, which is `get-video-data.py`.
+It works out which videos are missing, fetches them with their transcripts, merges
+everything, and sorts reverse-chronologically. To run it on its own:
 
 ```bash
 cd my-site
@@ -405,8 +423,9 @@ python get-video-data.py --proxy --check
 
 ### The manual step that is easy to forget
 
-**The script writes `updated_videos.json`, not `videos.json`.** You have to promote
-it yourself, and re-fingerprint it in the same breath:
+**`get-video-data.py` writes `updated_videos.json`, not `videos.json`.** Running it
+directly leaves the archive untouched until you promote the new file and
+re-fingerprint it in the same breath:
 
 ```bash
 mv updated_videos.json videos.json
@@ -415,6 +434,10 @@ git add videos.json version.json
 git commit -m "Update videos.json"
 git push
 ```
+
+`./update-site.py` exists to make this unforgettable: it does the promote and the
+fingerprint itself, in that order, and refuses to promote a dataset holding fewer
+videos than the one it would overwrite.
 
 Skipping `write-version.py` does not break the site — it makes every returning
 visitor's cached copy look current while the archive underneath has moved on, so
